@@ -1,0 +1,11 @@
+{
+  "name": "@realtime/user",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "echo 'User app scaffold pending next task'",
+    "build": "echo 'User app scaffold pending next task'",
+    "lint": "echo 'User app scaffold pending next task'",
+    "test": "echo 'User app scaffold pending next task'"
+  }
+}

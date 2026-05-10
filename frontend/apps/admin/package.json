@@ -1,0 +1,11 @@
+{
+  "name": "@realtime/admin",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "echo 'Admin app scaffold pending next task'",
+    "build": "echo 'Admin app scaffold pending next task'",
+    "lint": "echo 'Admin app scaffold pending next task'",
+    "test": "echo 'Admin app scaffold pending next task'"
+  }
+}
