@@ -114,6 +114,21 @@ func (m *Manager) GetSnapshot(id string) (Snapshot, error) {
 	return buildSnapshot(s, time.Now().UTC()), nil
 }
 
+func (m *Manager) ListSnapshots() ([]Snapshot, error) {
+	sessions, err := m.store.List()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	snapshots := make([]Snapshot, 0, len(sessions))
+	for _, s := range sessions {
+		snapshots = append(snapshots, buildSnapshot(s, now))
+	}
+
+	return snapshots, nil
+}
+
 func (m *Manager) ValidateControlToken(id, token string) error {
 	return m.store.ValidateControlToken(id, token)
 }

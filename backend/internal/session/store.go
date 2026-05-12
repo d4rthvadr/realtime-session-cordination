@@ -9,6 +9,9 @@ type Store interface {
 	// Get retrieves a session by ID.
 	Get(id string) (*Session, error)
 
+	// List retrieves all sessions.
+	List() ([]*Session, error)
+
 	// Update persists changes to an existing session.
 	Update(session *Session) error
 

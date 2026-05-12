@@ -39,6 +39,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	apiV1 := router.Group("/api/v1")
 	{
 		apiV1.POST("/sessions", h.createSession)
+		apiV1.GET("/sessions", h.listSessions)
 		apiV1.GET("/sessions/:id", h.getSession)
 		apiV1.POST("/sessions/:id/start", h.startSession)
 		apiV1.POST("/sessions/:id/pause", h.pauseSession)
@@ -77,6 +78,16 @@ func (h *Handler) getSession(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"session": snap})
+}
+
+func (h *Handler) listSessions(c *gin.Context) {
+	snapshots, err := h.manager.ListSnapshots()
+	if err != nil {
+		h.writeDomainErr(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"sessions": snapshots})
 }
 
 func (h *Handler) startSession(c *gin.Context) {

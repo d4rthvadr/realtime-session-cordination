@@ -1,6 +1,7 @@
 package session
 
 import (
+	"sort"
 	"sync"
 )
 
@@ -36,6 +37,23 @@ func (ms *MemoryStore) Get(id string) (*Session, error) {
 		return nil, ErrNotFound
 	}
 	return s, nil
+}
+
+// List retrieves all sessions from memory ordered by newest first.
+func (ms *MemoryStore) List() ([]*Session, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+
+	result := make([]*Session, 0, len(ms.sessions))
+	for _, s := range ms.sessions {
+		result = append(result, s)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+
+	return result, nil
 }
 
 // Update persists changes to a session in memory.

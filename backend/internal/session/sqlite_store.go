@@ -149,6 +149,70 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 	return &session, nil
 }
 
+// List retrieves all sessions ordered by creation time descending.
+func (s *SqliteStore) List() ([]*Session, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, speaker_name, duration_seconds, status,
+		       started_at, paused_at, total_paused_duration_seconds,
+		       adjustment_seconds, ended_remaining_seconds,
+		       control_token, created_at
+		FROM sessions
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	sessions := make([]*Session, 0)
+	for rows.Next() {
+		var session Session
+		var startedAt sql.NullString
+		var pausedAt sql.NullString
+		var endedRemaining sql.NullInt64
+		var createdAtStr string
+
+		err = rows.Scan(
+			&session.ID,
+			&session.Title,
+			&session.SpeakerName,
+			&session.DurationSeconds,
+			&session.Status,
+			&startedAt,
+			&pausedAt,
+			&session.TotalPausedDurationSeconds,
+			&session.AdjustmentSeconds,
+			&endedRemaining,
+			&session.ControlToken,
+			&createdAtStr,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan session row: %w", err)
+		}
+
+		session.StartedAt = nullStringToTime(startedAt)
+		session.PausedAt = nullStringToTime(pausedAt)
+		if endedRemaining.Valid {
+			v := int(endedRemaining.Int64)
+			session.EndedRemainingSeconds = &v
+		}
+
+		createdAt, parseErr := time.Parse(time.RFC3339, createdAtStr)
+		if parseErr != nil {
+			return nil, fmt.Errorf("failed to parse created_at: %w", parseErr)
+		}
+		session.CreatedAt = createdAt
+
+		sessions = append(sessions, &session)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed while iterating sessions: %w", err)
+	}
+
+	return sessions, nil
+}
+
 // Update persists changes to an existing session
 func (s *SqliteStore) Update(session *Session) error {
 	result, err := s.db.Exec(`
