@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
+import SessionLoadingState from "@/components/SessionLoadingState";
+import SessionNotFoundState from "@/components/SessionNotFoundState";
 import { useSessionSocket } from "@/hooks/useSessionSocket";
 import { formatDuration, getTimerState } from "@/lib/time";
 import { useSessionStore } from "@/store/sessionStore";
@@ -18,6 +20,10 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
   );
   const status = useSessionStore((state) => state.status);
   const connectionState = useSessionStore((state) => state.connectionState);
+  const hasReceivedSnapshot = useSessionStore(
+    (state) => state.hasReceivedSnapshot,
+  );
+  const sessionNotFound = useSessionStore((state) => state.sessionNotFound);
   const tickFromClient = useSessionStore((state) => state.tickFromClient);
 
   useSessionSocket(sessionId);
@@ -34,6 +40,21 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
     () => getTimerState(serverRemainingSeconds, durationSeconds),
     [serverRemainingSeconds, durationSeconds],
   );
+
+  const isLoadingInitialSession = !hasReceivedSnapshot;
+
+  if (sessionNotFound) {
+    return <SessionNotFoundState sessionId={sessionId} />;
+  }
+
+  if (isLoadingInitialSession) {
+    return (
+      <SessionLoadingState
+        sessionId={sessionId}
+        connectionState={connectionState}
+      />
+    );
+  }
 
   return (
     <section className="mx-auto flex min-h-screen max-w-4xl flex-col justify-center px-6 py-10 text-center text-slate-100">

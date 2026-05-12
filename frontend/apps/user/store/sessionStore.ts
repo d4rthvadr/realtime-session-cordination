@@ -19,9 +19,13 @@ export interface SessionSnapshot {
 
 interface SessionStore extends SessionSnapshot {
   connectionState: ConnectionState;
+  hasReceivedSnapshot: boolean;
+  sessionNotFound: boolean;
   setSnapshot: (snapshot: Partial<SessionSnapshot>) => void;
   tickFromClient: () => void;
   setConnectionState: (state: ConnectionState) => void;
+  setSessionNotFound: (notFound: boolean) => void;
+  resetSession: () => void;
 }
 
 const INITIAL_DURATION_SECONDS = 25 * 60;
@@ -38,10 +42,14 @@ const DEFAULT_SESSION_VALUES: SessionSnapshot = {
 export const useSessionStore = create<SessionStore>((set) => ({
   ...DEFAULT_SESSION_VALUES,
   connectionState: "mocked",
+  hasReceivedSnapshot: false,
+  sessionNotFound: false,
   setSnapshot: (snapshot) =>
     set({
       ...snapshot,
       serverNowMs: Date.now(),
+      hasReceivedSnapshot: true,
+      sessionNotFound: false,
     }),
   tickFromClient: () =>
     set((state) => {
@@ -56,4 +64,12 @@ export const useSessionStore = create<SessionStore>((set) => ({
       };
     }),
   setConnectionState: (connectionState) => set({ connectionState }),
+  setSessionNotFound: (sessionNotFound) => set({ sessionNotFound }),
+  resetSession: () =>
+    set({
+      ...DEFAULT_SESSION_VALUES,
+      connectionState: "connecting",
+      hasReceivedSnapshot: false,
+      sessionNotFound: false,
+    }),
 }));
