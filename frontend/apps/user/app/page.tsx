@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 export default function HomePage() {
   return (
     <main className="min-h-screen bg-slate text-slate-100">
@@ -15,12 +13,9 @@ export default function HomePage() {
           intentionally public and read-only for audience and speaker
           visibility.
         </p>
-        <Link
-          href="/sessions/demo-session"
-          className="rounded-md bg-slate-100 px-6 py-3 font-medium text-slate-900 transition hover:bg-white"
-        >
-          Open Demo Session
-        </Link>
+        <p className="rounded-md border border-slate-700 px-6 py-3 text-sm text-slate-300">
+          Use a live session URL from the host app to view an active countdown.
+        </p>
       </section>
     </main>
   );

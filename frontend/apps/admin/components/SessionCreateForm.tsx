@@ -1,64 +1,59 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { buildAdminApiUrl } from "@/lib/backend";
 import { parseDurationToSeconds } from "@/lib/session";
+import { createSession } from "@/lib/actions";
 
 export default function SessionCreateForm() {
   const router = useRouter();
+  const [isPending, startTransition] = useTransition();
 
   const [title, setTitle] = useState("Kubernetes Workshop");
   const [speakerName, setSpeakerName] = useState("John Doe");
   const [durationMinutes, setDurationMinutes] = useState("30");
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const onSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const onSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setIsSubmitting(true);
+    setValidationError(null);
+    setError(null);
 
     const durationSeconds = parseDurationToSeconds(durationMinutes);
     if (!title.trim() || !speakerName.trim() || durationSeconds <= 0) {
-      setError("Please provide title, speaker, and a valid positive duration.");
-      setIsSubmitting(false);
+      setValidationError(
+        "Please provide title, speaker, and a valid positive duration.",
+      );
       return;
     }
 
-    try {
-      const response = await fetch(buildAdminApiUrl("/api/v1/sessions"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          title: title.trim(),
-          speakerName: speakerName.trim(),
-          durationSeconds,
-        }),
+    startTransition(async () => {
+      const result = await createSession({
+        name: title.trim(),
+        duration: durationSeconds,
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to create session");
+      if (result.error) {
+        setError(result.error);
+        return;
       }
 
-      const payload = (await response.json()) as {
-        session: { id: string };
-        controlToken: string;
-      };
+      if (result.session) {
+        // Store control token if backend returns it
+        if (
+          "controlToken" in result.session &&
+          typeof (result.session as any).controlToken === "string"
+        ) {
+          window.sessionStorage.setItem(
+            `controlToken:${result.session.id}`,
+            (result.session as any).controlToken,
+          );
+        }
 
-      window.sessionStorage.setItem(
-        `controlToken:${payload.session.id}`,
-        payload.controlToken,
-      );
-
-      setError(null);
-      router.push(`/sessions/${payload.session.id}`);
-    } catch {
-      setError("Could not create the session in the backend.");
-    } finally {
-      setIsSubmitting(false);
-    }
+        router.push(`/sessions/${result.session.id}`);
+      }
+    });
   };
 
   return (
@@ -111,14 +106,17 @@ export default function SessionCreateForm() {
         />
       </label>
 
+      {validationError ? (
+        <p className="text-sm text-red-700">{validationError}</p>
+      ) : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
       <button
         type="submit"
-        disabled={isSubmitting}
+        disabled={isPending}
         className="w-full rounded-md bg-slate-900 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
       >
-        {isSubmitting ? "Creating..." : "Create Session"}
+        {isPending ? "Creating..." : "Create Session"}
       </button>
     </form>
   );

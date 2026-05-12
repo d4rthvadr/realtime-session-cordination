@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import SessionLoadingState from "@/components/SessionLoadingState";
+import SessionNotFoundState from "@/components/SessionNotFoundState";
 import { useSessionSocket } from "@/hooks/useSessionSocket";
 import { formatDuration, getTimerState } from "@/lib/time";
 import { useSessionStore } from "@/store/sessionStore";
@@ -17,23 +19,67 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
     (state) => state.serverRemainingSeconds,
   );
   const status = useSessionStore((state) => state.status);
+  const serverNowMs = useSessionStore((state) => state.serverNowMs);
   const connectionState = useSessionStore((state) => state.connectionState);
-  const tickFromClient = useSessionStore((state) => state.tickFromClient);
+  const hasReceivedSnapshot = useSessionStore(
+    (state) => state.hasReceivedSnapshot,
+  );
+  const sessionNotFound = useSessionStore((state) => state.sessionNotFound);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useSessionSocket(sessionId);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      tickFromClient();
+    setNowMs(Date.now());
+    if (status !== "LIVE") {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setNowMs(Date.now());
     }, 1000);
 
-    return () => clearInterval(interval);
-  }, [tickFromClient]);
+    return () => clearInterval(timer);
+  }, [status, serverNowMs]);
+
+  const remainingSeconds = useMemo(() => {
+    const baseRemaining =
+      typeof serverRemainingSeconds === "number"
+        ? serverRemainingSeconds
+        : Number(serverRemainingSeconds);
+
+    if (!Number.isFinite(baseRemaining)) {
+      return 0;
+    }
+
+    if (status !== "LIVE") {
+      return baseRemaining;
+    }
+
+    const baseNow = typeof serverNowMs === "number" ? serverNowMs : nowMs;
+    const elapsedSeconds = Math.max(0, Math.floor((nowMs - baseNow) / 1000));
+    return baseRemaining - elapsedSeconds;
+  }, [serverNowMs, serverRemainingSeconds, status, nowMs]);
 
   const timerState = useMemo(
-    () => getTimerState(serverRemainingSeconds, durationSeconds),
-    [serverRemainingSeconds, durationSeconds],
+    () => getTimerState(remainingSeconds, durationSeconds),
+    [remainingSeconds, durationSeconds],
   );
+
+  const isLoadingInitialSession = !hasReceivedSnapshot;
+
+  if (sessionNotFound) {
+    return <SessionNotFoundState sessionId={sessionId} />;
+  }
+
+  if (isLoadingInitialSession) {
+    return (
+      <SessionLoadingState
+        sessionId={sessionId}
+        connectionState={connectionState}
+      />
+    );
+  }
 
   return (
     <section className="mx-auto flex min-h-screen max-w-4xl flex-col justify-center px-6 py-10 text-center text-slate-100">
@@ -52,8 +98,8 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
         <p
           className={`mt-2 text-7xl font-bold tracking-tight sm:text-8xl ${timerState.colorClass}`}
         >
-          {serverRemainingSeconds < 0 ? "-" : ""}
-          {formatDuration(serverRemainingSeconds)}
+          {remainingSeconds < 0 ? "-" : ""}
+          {formatDuration(remainingSeconds)}
         </p>
         <p className="mt-4 text-sm text-slate-300">
           State: <span className="font-semibold text-slate-100">{status}</span>{" "}
@@ -72,11 +118,6 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
           Connection: {connectionState}
         </span>
       </div>
-
-      <p className="mt-8 text-sm text-slate-400">
-        This view is currently wired to mock realtime events and will be
-        connected to backend WebSocket events in integration.
-      </p>
     </section>
   );
 }

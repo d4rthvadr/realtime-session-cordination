@@ -1,67 +1,48 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { buildAdminApiUrl, getViewerUrl } from "@/lib/backend";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { getViewerUrl } from "@/lib/backend";
 import { formatClock } from "@/lib/session";
-
-interface SessionSnapshot {
-  id: string;
-  title: string;
-  speakerName: string;
-  durationSeconds: number;
-  status: "CREATED" | "LIVE" | "PAUSED" | "ENDED";
-  remainingSeconds: number;
-  createdAt?: string;
-}
+import EmptyState from "./EmptyState";
+import {
+  getSessionSnapshot,
+  startSession,
+  pauseSession,
+  resumeSession,
+  endSession,
+  adjustSessionTime,
+  SessionSnapshot,
+} from "@/lib/actions";
 
 interface HostControlPanelProps {
   sessionId: string;
 }
 
-type ActionState = "idle" | "loading" | "error";
-
 export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
   const [session, setSession] = useState<SessionSnapshot | null>(null);
-  const [actionState, setActionState] = useState<ActionState>("idle");
-  const [message, setMessage] = useState<string | null>(null);
   const [controlToken, setControlToken] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
 
+  // Load initial session and control token
   useEffect(() => {
-    setControlToken(window.sessionStorage.getItem(`controlToken:${sessionId}`));
-  }, [sessionId]);
+    const token = window.sessionStorage.getItem(`controlToken:${sessionId}`);
+    setControlToken(token);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadSession = async () => {
-      try {
-        const response = await fetch(
-          buildAdminApiUrl(`/api/v1/sessions/${sessionId}`),
-        );
-        if (!response.ok) {
-          throw new Error("session not found");
-        }
-
-        const payload = (await response.json()) as { session: SessionSnapshot };
-        if (!cancelled) {
-          setSession(payload.session);
-        }
-      } catch {
-        if (!cancelled) {
-          setMessage("Could not load session state from the backend.");
-        }
+    startTransition(async () => {
+      const result = await getSessionSnapshot(sessionId);
+      if (result.error) {
+        setLoadError(result.error);
+      } else if (result.session) {
+        setSession(result.session);
       }
-    };
-
-    void loadSession();
-
-    return () => {
-      cancelled = true;
-    };
+    });
   }, [sessionId]);
 
+  // Auto-decrement time when session is running
   useEffect(() => {
-    if (!session || session.status === "ENDED") {
+    if (!session || session.status !== "LIVE") {
       return;
     }
 
@@ -72,60 +53,46 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
         }
         return {
           ...current,
-          remainingSeconds: current.remainingSeconds - 1,
+          remainingSeconds: Math.max(0, current.remainingSeconds - 1),
         };
       });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [session]);
+  }, [session, session?.status]);
 
   const viewerLink = useMemo(() => getViewerUrl(sessionId), [sessionId]);
 
-  const authorizedFetch = async (path: string, init: RequestInit = {}) => {
+  const handleAction = async (
+    action: (
+      token: string,
+    ) => Promise<{ session: SessionSnapshot | null; error: string | null }>,
+  ) => {
     if (!controlToken) {
-      throw new Error("Missing control token for this session");
+      setActionError("No control token available");
+      return;
     }
 
-    const response = await fetch(buildAdminApiUrl(path), {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Control-Token": controlToken,
-        ...(init.headers || {}),
-      },
+    setActionError(null);
+    startTransition(async () => {
+      const result = await action(controlToken);
+      if (result.error) {
+        setActionError(result.error);
+      } else if (result.session) {
+        setSession(result.session);
+      }
     });
-
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
-
-    return response;
-  };
-
-  const runAction = async (path: string, body?: unknown) => {
-    setActionState("loading");
-    setMessage(null);
-
-    try {
-      const response = await authorizedFetch(path, {
-        method: "POST",
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const payload = (await response.json()) as { session: SessionSnapshot };
-      setSession(payload.session);
-      setActionState("idle");
-    } catch (error) {
-      setActionState("error");
-      setMessage(error instanceof Error ? error.message : "Action failed");
-    }
   };
 
   if (!session) {
+    if (loadError) {
+      return <EmptyState title="Session Not Found" description={loadError} />;
+    }
     return (
-      <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-800">
-        {message || "Loading session from the backend..."}
-      </div>
+      <EmptyState
+        title="Loading Session"
+        description="Fetching session data from the backend..."
+      />
     );
   }
 
@@ -139,7 +106,7 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
       <header>
         <h2 className="text-xl font-semibold text-slate-900">Host Controls</h2>
         <p className="text-sm text-slate-600">
-          Session: {session.title} · Speaker: {session.speakerName}
+          {session.title} • {session.speakerName}
         </p>
       </header>
 
@@ -148,39 +115,47 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
         <p className="text-2xl font-semibold text-slate-900">
           {session.status}
         </p>
-        <p className="mt-2 text-sm text-slate-500">Remaining</p>
+        <p className="mt-2 text-sm text-slate-500">Time Remaining</p>
         <p className="text-3xl font-bold text-slate-900">
-          {formatClock(session.remainingSeconds)}
+          {formatClock(session.remainingSeconds, "--:--")}
         </p>
       </div>
 
-      {message ? <p className="text-sm text-rose-700">{message}</p> : null}
+      {actionError ? (
+        <p className="text-sm text-rose-700">{actionError}</p>
+      ) : null}
 
       <div className="grid gap-2 sm:grid-cols-2">
         <button
-          disabled={!canStart || actionState === "loading"}
-          onClick={() => void runAction(`/api/v1/sessions/${sessionId}/start`)}
+          disabled={!canStart || isPending}
+          onClick={() =>
+            handleAction((token) => startSession(sessionId, token))
+          }
           className="rounded-md bg-emerald-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           Start
         </button>
         <button
-          disabled={!canPause || actionState === "loading"}
-          onClick={() => void runAction(`/api/v1/sessions/${sessionId}/pause`)}
+          disabled={!canPause || isPending}
+          onClick={() =>
+            handleAction((token) => pauseSession(sessionId, token))
+          }
           className="rounded-md bg-amber-500 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           Pause
         </button>
         <button
-          disabled={!canResume || actionState === "loading"}
-          onClick={() => void runAction(`/api/v1/sessions/${sessionId}/resume`)}
+          disabled={!canResume || isPending}
+          onClick={() =>
+            handleAction((token) => resumeSession(sessionId, token))
+          }
           className="rounded-md bg-sky-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           Resume
         </button>
         <button
-          disabled={!canEnd || actionState === "loading"}
-          onClick={() => void runAction(`/api/v1/sessions/${sessionId}/end`)}
+          disabled={!canEnd || isPending}
+          onClick={() => handleAction((token) => endSession(sessionId, token))}
           className="rounded-md bg-rose-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           End
@@ -189,22 +164,22 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
 
       <div className="grid gap-2 sm:grid-cols-2">
         <button
-          disabled={actionState === "loading"}
+          disabled={isPending}
           onClick={() =>
-            void runAction(`/api/v1/sessions/${sessionId}/adjust-time`, {
-              deltaSeconds: 60,
-            })
+            handleAction((token) =>
+              adjustSessionTime(sessionId, { deltaSeconds: 60 }, token),
+            )
           }
           className="rounded-md border border-slate-300 px-4 py-2 font-medium text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-100"
         >
           +60 seconds
         </button>
         <button
-          disabled={actionState === "loading"}
+          disabled={isPending}
           onClick={() =>
-            void runAction(`/api/v1/sessions/${sessionId}/adjust-time`, {
-              deltaSeconds: -60,
-            })
+            handleAction((token) =>
+              adjustSessionTime(sessionId, { deltaSeconds: -60 }, token),
+            )
           }
           className="rounded-md border border-slate-300 px-4 py-2 font-medium text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-100"
         >

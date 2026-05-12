@@ -1,4 +1,5 @@
 import SessionCreateForm from "@/components/SessionCreateForm";
+import Link from "next/link";
 
 export default function AdminHomePage() {
   return (
@@ -12,9 +13,14 @@ export default function AdminHomePage() {
             Admin Console
           </h1>
           <p className="text-slate-600">
-            Create and control session timing before wiring to backend
-            endpoints.
+            Create, manage, and review live sessions.
           </p>
+          <Link
+            href="/sessions"
+            className="inline-flex rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 transition hover:border-slate-400 hover:bg-slate-50"
+          >
+            View All Sessions
+          </Link>
         </header>
 
         <SessionCreateForm />
