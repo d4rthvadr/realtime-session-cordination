@@ -105,7 +105,10 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 	`, id)
 
 	var session Session
-	var startedAtStr, pausedAtStr, createdAtStr string
+	var startedAt sql.NullString
+	var pausedAt sql.NullString
+	var endedRemaining sql.NullInt64
+	var createdAtStr string
 
 	err := row.Scan(
 		&session.ID,
@@ -113,11 +116,11 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 		&session.SpeakerName,
 		&session.DurationSeconds,
 		&session.Status,
-		&startedAtStr,
-		&pausedAtStr,
+		&startedAt,
+		&pausedAt,
 		&session.TotalPausedDurationSeconds,
 		&session.AdjustmentSeconds,
-		&session.EndedRemainingSeconds,
+		&endedRemaining,
 		&session.ControlToken,
 		&createdAtStr,
 	)
@@ -129,9 +132,13 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
 
-	// Parse timestamps
-	session.StartedAt = stringToTime(&startedAtStr)
-	session.PausedAt = stringToTime(&pausedAtStr)
+	// Parse nullable timestamps and integers
+	session.StartedAt = nullStringToTime(startedAt)
+	session.PausedAt = nullStringToTime(pausedAt)
+	if endedRemaining.Valid {
+		v := int(endedRemaining.Int64)
+		session.EndedRemainingSeconds = &v
+	}
 
 	createdAt, err := time.Parse(time.RFC3339, createdAtStr)
 	if err != nil {
@@ -233,6 +240,17 @@ func stringToTime(s *string) *time.Time {
 		return nil
 	}
 	t, err := time.Parse(time.RFC3339, *s)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
+func nullStringToTime(ns sql.NullString) *time.Time {
+	if !ns.Valid || ns.String == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, ns.String)
 	if err != nil {
 		return nil
 	}
