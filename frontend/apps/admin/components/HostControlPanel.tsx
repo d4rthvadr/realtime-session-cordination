@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { getViewerUrl } from "@/lib/backend";
 import { formatClock } from "@/lib/session";
+import EmptyState from "./EmptyState";
 import {
   getSessionSnapshot,
   startSession,
@@ -84,10 +85,14 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
   };
 
   if (!session) {
+    if (loadError) {
+      return <EmptyState title="Session Not Found" description={loadError} />;
+    }
     return (
-      <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-800">
-        {loadError || "Loading session from the backend..."}
-      </div>
+      <EmptyState
+        title="Loading Session"
+        description="Fetching session data from the backend..."
+      />
     );
   }
 

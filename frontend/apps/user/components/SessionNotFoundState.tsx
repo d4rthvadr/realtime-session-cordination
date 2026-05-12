@@ -1,3 +1,5 @@
+import EmptyState from "@/components/EmptyState";
+
 interface SessionNotFoundStateProps {
   sessionId: string;
 }
@@ -11,20 +13,12 @@ export default function SessionNotFoundState({
         Session Viewer
       </p>
 
-      <div className="mt-6 rounded-2xl border border-amber-700/40 bg-slate-900/70 p-8 shadow-2xl backdrop-blur">
-        <h1 className="text-3xl font-semibold text-amber-300 sm:text-4xl">
-          Session Not Found
-        </h1>
-        <p className="mt-4 text-slate-300">
-          We could not find a live session for this link.
-        </p>
-        <p className="mt-2 text-sm text-slate-400">
-          Verify the session ID and try again.
-        </p>
-
-        <div className="mt-6 inline-flex rounded-full border border-slate-700 px-4 py-1 text-sm text-slate-300">
-          Session: {sessionId}
-        </div>
+      <div className="mt-6">
+        <EmptyState
+          title="Session Not Found"
+          description={`We could not find a live session for this link. Verify the session ID (${sessionId}) and try again.`}
+          isDark
+        />
       </div>
     </section>
   );

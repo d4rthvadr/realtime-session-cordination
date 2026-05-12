@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { formatClock } from "@/lib/session";
 import { getSessionsList, SessionSnapshot } from "@/lib/actions";
+import EmptyState from "@/components/EmptyState";
 
 export default function SessionsListPage() {
   const [sessions, setSessions] = useState<SessionSnapshot[]>([]);
@@ -59,9 +60,10 @@ export default function SessionsListPage() {
         ) : null}
 
         {!isLoading && !error && sessions.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600 shadow-sm">
-            No sessions found.
-          </div>
+          <EmptyState
+            title="No Sessions Found"
+            description="Create a new session from the admin home page to get started."
+          />
         ) : null}
 
         {!isLoading && !error && sessions.length > 0 ? (
