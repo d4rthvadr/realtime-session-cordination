@@ -1,12 +1,7 @@
 import { create } from "zustand";
 
 export type SessionStatus = "CREATED" | "LIVE" | "PAUSED" | "ENDED";
-export type ConnectionState =
-  | "mocked"
-  | "connecting"
-  | "connected-mock"
-  | "connected"
-  | "disconnected";
+export type ConnectionState = "connecting" | "connected" | "disconnected";
 
 export interface SessionSnapshot {
   title: string;
@@ -22,26 +17,23 @@ interface SessionStore extends SessionSnapshot {
   hasReceivedSnapshot: boolean;
   sessionNotFound: boolean;
   setSnapshot: (snapshot: Partial<SessionSnapshot>) => void;
-  tickFromClient: () => void;
   setConnectionState: (state: ConnectionState) => void;
   setSessionNotFound: (notFound: boolean) => void;
   resetSession: () => void;
 }
 
-const INITIAL_DURATION_SECONDS = 25 * 60;
-
 const DEFAULT_SESSION_VALUES: SessionSnapshot = {
-  title: "Demo Session",
-  speakerName: "Sample Speaker",
-  durationSeconds: INITIAL_DURATION_SECONDS,
-  serverRemainingSeconds: INITIAL_DURATION_SECONDS,
+  title: "",
+  speakerName: "",
+  durationSeconds: 0,
+  serverRemainingSeconds: 0,
   status: "CREATED",
   serverNowMs: Date.now(),
 };
 
 export const useSessionStore = create<SessionStore>((set) => ({
   ...DEFAULT_SESSION_VALUES,
-  connectionState: "mocked",
+  connectionState: "connecting",
   hasReceivedSnapshot: false,
   sessionNotFound: false,
   setSnapshot: (snapshot) =>
@@ -50,18 +42,6 @@ export const useSessionStore = create<SessionStore>((set) => ({
       serverNowMs: Date.now(),
       hasReceivedSnapshot: true,
       sessionNotFound: false,
-    }),
-  tickFromClient: () =>
-    set((state) => {
-      if (state.status !== "LIVE") {
-        return state;
-      }
-
-      const elapsedSeconds = (Date.now() - state.serverNowMs!) / 1000;
-      return {
-        serverRemainingSeconds: state.serverRemainingSeconds - elapsedSeconds,
-        serverNowMs: Date.now(),
-      };
     }),
   setConnectionState: (connectionState) => set({ connectionState }),
   setSessionNotFound: (sessionNotFound) => set({ sessionNotFound }),

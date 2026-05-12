@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import SessionLoadingState from "@/components/SessionLoadingState";
 import SessionNotFoundState from "@/components/SessionNotFoundState";
 import { useSessionSocket } from "@/hooks/useSessionSocket";
@@ -24,17 +24,8 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
     (state) => state.hasReceivedSnapshot,
   );
   const sessionNotFound = useSessionStore((state) => state.sessionNotFound);
-  const tickFromClient = useSessionStore((state) => state.tickFromClient);
 
   useSessionSocket(sessionId);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      tickFromClient();
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [tickFromClient]);
 
   const timerState = useMemo(
     () => getTimerState(serverRemainingSeconds, durationSeconds),
@@ -93,11 +84,6 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
           Connection: {connectionState}
         </span>
       </div>
-
-      <p className="mt-8 text-sm text-slate-400">
-        This view is currently wired to mock realtime events and will be
-        connected to backend WebSocket events in integration.
-      </p>
     </section>
   );
 }
