@@ -9,6 +9,7 @@ import (
 	"realtime-session-coordination/backend/internal/ws"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
 // initStore creates the appropriate Store implementation based on DB_DRIVER env var
@@ -34,6 +35,10 @@ func initStore() (session.Store, error) {
 }
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Printf(".env not loaded: %v", err)
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
