@@ -1,0 +1,179 @@
+name: CI/CD Pipeline
+
+on:
+    push:
+        branches: [main, develop]
+    pull_request:
+        branches: [main, develop]
+
+env:
+    NODE_VERSION: "18"
+    GO_VERSION: "1.25"
+
+jobs:
+    frontend-lint-build:
+        name: Frontend - Lint & Build
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: ./frontend
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm install
+
+            - name: Lint TypeScript
+              run: npm run lint
+              continue-on-error: true # Warning-level only
+
+            - name: Type check
+              run: npm run typecheck
+              continue-on-error: true
+
+            - name: Build user app
+              run: npm run build -w @realtime/user
+
+            - name: Build admin app
+              run: npm run build -w @realtime/admin
+
+            - name: Upload build artifacts
+              uses: actions/upload-artifact@v4
+              if: always()
+              with:
+                  name: frontend-builds
+                  path: |
+                      frontend/apps/user/.next
+                      frontend/apps/admin/.next
+                  retention-days: 5
+
+    backend-lint-build:
+        name: Backend - Lint & Build
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: ./backend
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Go
+              uses: actions/setup-go@v4
+              with:
+                  go-version: ${{ env.GO_VERSION }}
+                  cache: true
+
+            - name: Download dependencies
+              run: go mod download
+
+            - name: Verify modules
+              run: go mod verify
+
+            - name: Run go fmt
+              run: |
+                  files=$(gofmt -l .)
+                  if [ -n "$files" ]; then
+                    echo "The following files need formatting:"
+                    echo "$files"
+                    exit 1
+                  fi
+
+            - name: Run go vet
+              run: go vet ./...
+
+            - name: Run golangci-lint
+              uses: golangci/golangci-lint-action@v3
+              with:
+                  version: latest
+                  working-directory: ./backend
+                  skip-pkg-cache: false
+                  skip-build-cache: false
+              continue-on-error: true
+
+            - name: Build binary
+              run: go build -o bin/api ./cmd/api
+
+            - name: Upload build artifacts
+              uses: actions/upload-artifact@v4
+              if: always()
+              with:
+                  name: backend-build
+                  path: backend/bin/api
+                  retention-days: 5
+
+    backend-tests:
+        name: Backend - Tests
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: ./backend
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Go
+              uses: actions/setup-go@v4
+              with:
+                  go-version: ${{ env.GO_VERSION }}
+                  cache: true
+
+            - name: Run tests
+              run: go test -v -race -coverprofile=coverage.out ./...
+
+            - name: Upload coverage to Codecov
+              uses: codecov/codecov-action@v3
+              with:
+                  files: ./backend/coverage.out
+                  flags: backend
+                  fail_ci_if_error: false
+
+    security-scan:
+        name: Security - Dependency Scan
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  cache: "npm"
+
+            - name: Setup Go
+              uses: actions/setup-go@v4
+              with:
+                  go-version: ${{ env.GO_VERSION }}
+                  cache: true
+
+            - name: Run npm audit (non-blocking)
+              working-directory: ./frontend
+              run: npm audit
+              continue-on-error: true
+
+            - name: Run Trivy vulnerability scanner
+              uses: aquasecurity/trivy-action@master
+              with:
+                  scan-type: "fs"
+                  scan-ref: "."
+                  format: "sarif"
+                  output: "trivy-results.sarif"
+              continue-on-error: true
+
+            - name: Upload Trivy results to GitHub Security tab
+              uses: github/codeql-action/upload-sarif@v2
+              if: always()
+              with:
+                  sarif_file: "trivy-results.sarif"
+              continue-on-error: true

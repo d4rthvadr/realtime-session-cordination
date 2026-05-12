@@ -1,0 +1,181 @@
+name: Build & Deploy
+
+on:
+    push:
+        branches: [main]
+        tags:
+            - "v*.*.*"
+    workflow_dispatch:
+
+env:
+    NODE_VERSION: "18"
+    GO_VERSION: "1.25"
+    REGISTRY: ghcr.io
+    IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+    build-backend-docker:
+        name: Build Backend Docker Image
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Log in to Container Registry
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Extract metadata
+              id: meta
+              uses: docker/metadata-action@v5
+              with:
+                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend
+                  tags: |
+                      type=ref,event=branch
+                      type=semver,pattern={{version}}
+                      type=semver,pattern={{major}}.{{minor}}
+                      type=sha
+
+            - name: Build and push backend
+              uses: docker/build-push-action@v5
+              with:
+                  context: ./backend
+                  file: ./infra/docker/backend/Dockerfile
+                  push: ${{ github.event_name != 'pull_request' }}
+                  tags: ${{ steps.meta.outputs.tags }}
+                  labels: ${{ steps.meta.outputs.labels }}
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+    build-frontend-docker:
+        name: Build Frontend Docker Image
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Log in to Container Registry
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Extract metadata (user)
+              id: meta-user
+              uses: docker/metadata-action@v5
+              with:
+                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend-user
+                  tags: |
+                      type=ref,event=branch
+                      type=semver,pattern={{version}}
+                      type=semver,pattern={{major}}.{{minor}}
+                      type=sha
+
+            - name: Extract metadata (admin)
+              id: meta-admin
+              uses: docker/metadata-action@v5
+              with:
+                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend-admin
+                  tags: |
+                      type=ref,event=branch
+                      type=semver,pattern={{version}}
+                      type=semver,pattern={{major}}.{{minor}}
+                      type=sha
+
+            - name: Build and push frontend (user app)
+              uses: docker/build-push-action@v5
+              with:
+                  context: ./frontend
+                  file: ./infra/docker/frontend/Dockerfile.user
+                  push: ${{ github.event_name != 'pull_request' }}
+                  tags: ${{ steps.meta-user.outputs.tags }}
+                  labels: ${{ steps.meta-user.outputs.labels }}
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+            - name: Build and push frontend (admin app)
+              uses: docker/build-push-action@v5
+              with:
+                  context: ./frontend
+                  file: ./infra/docker/frontend/Dockerfile.admin
+                  push: ${{ github.event_name != 'pull_request' }}
+                  tags: ${{ steps.meta-admin.outputs.tags }}
+                  labels: ${{ steps.meta-admin.outputs.labels }}
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+    publish-release:
+        name: Publish Release
+        runs-on: ubuntu-latest
+        needs: [build-backend-docker, build-frontend-docker]
+        if: startsWith(github.ref, 'refs/tags/v')
+        permissions:
+            contents: write
+            packages: read
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Create Release
+              uses: softprops/action-gh-release@v1
+              with:
+                  generate_release_notes: true
+                  draft: false
+                  prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    deploy-staging:
+        name: Deploy to Staging
+        runs-on: ubuntu-latest
+        needs: [build-backend-docker, build-frontend-docker]
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Deploy to staging
+              run: |
+                  echo "🚀 Deploying to staging environment..."
+                  # Add your deployment commands here
+                  # Example: kubectl apply -f k8s/staging/
+                  # Example: docker-compose -f docker-compose.staging.yml up -d
+                  echo "✅ Staging deployment complete"
+
+    deploy-production:
+        name: Deploy to Production
+        runs-on: ubuntu-latest
+        needs: [build-backend-docker, build-frontend-docker]
+        if: startsWith(github.ref, 'refs/tags/v')
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Deploy to production
+              run: |
+                  echo "🚀 Deploying to production environment..."
+                  # Add your deployment commands here
+                  # Example: kubectl apply -f k8s/production/
+                  # Example: docker-compose -f docker-compose.prod.yml up -d
+                  echo "✅ Production deployment complete"
