@@ -26,24 +26,29 @@ jobs:
               uses: actions/setup-node@v4
               with:
                   node-version: ${{ env.NODE_VERSION }}
-                  cache: "npm"
+                  cache: "pnpm"
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v2
+              with:
+                  version: 8
 
             - name: Install dependencies
-              run: npm install
+              run: pnpm install --frozen-lockfile
 
             - name: Lint TypeScript
-              run: npm run lint
+              run: pnpm run lint
               continue-on-error: true # Warning-level only
 
             - name: Type check
-              run: npm run typecheck
+              run: pnpm run typecheck
               continue-on-error: true
 
             - name: Build user app
-              run: npm run build -w @realtime/user
+              run: pnpm run build -w @realtime/user
 
             - name: Build admin app
-              run: npm run build -w @realtime/admin
+              run: pnpm run build -w @realtime/admin
 
             - name: Upload build artifacts
               uses: actions/upload-artifact@v4
@@ -149,7 +154,12 @@ jobs:
               uses: actions/setup-node@v4
               with:
                   node-version: ${{ env.NODE_VERSION }}
-                  cache: "npm"
+                  cache: "pnpm"
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v2
+              with:
+                  version: 8
 
             - name: Setup Go
               uses: actions/setup-go@v4
@@ -157,9 +167,9 @@ jobs:
                   go-version: ${{ env.GO_VERSION }}
                   cache: true
 
-            - name: Run npm audit (non-blocking)
+            - name: Run pnpm audit (non-blocking)
               working-directory: ./frontend
-              run: npm audit
+              run: pnpm audit
               continue-on-error: true
 
             - name: Run Trivy vulnerability scanner

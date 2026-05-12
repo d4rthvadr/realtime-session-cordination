@@ -17,13 +17,22 @@ The long-term vision is to evolve into a comprehensive realtime presentation coo
 
 See [Setup Guide](docs/setup.md) for detailed installation and run instructions.
 
-### TL;DR
+### Local Development (3 commands)
 
 ```bash
 make install          # Install dependencies
 make backend          # Start backend on :8080
 make frontend-user    # Start user app on :3001
 make frontend-admin   # Start admin app on :3002
+```
+
+### Docker (1 command)
+
+```bash
+# From root directory (or cd infra/ for canonical location)
+docker-compose up --build
+
+# Services: http://localhost:8080 (backend), :3001 (user), :3002 (admin)
 ```
 
 ## Project Structure
@@ -42,10 +51,21 @@ make frontend-admin   # Start admin app on :3002
 │   │   ├── session/      # Domain model and state machine
 │   │   └── ws/           # WebSocket hub and connection management
 │   └── go.mod
+├── infra/                 # Infrastructure & deployment
+│   ├── docker/
+│   │   ├── backend/      # Backend Docker image definition
+│   │   └── frontend/     # Frontend Docker image definitions
+│   └── docker-compose.yml    # Multi-service orchestration
 ├── docs/                  # Documentation
 │   ├── setup.md          # Installation and development setup
 │   ├── api.md            # API structure and endpoints
-│   └── architecture.md   # System architecture and design
+│   ├── architecture.md   # System architecture and design
+│   └── cicd.md           # CI/CD pipelines and deployment
+├── .github/
+│   └── workflows/        # GitHub Actions workflows
+│       ├── ci.yml        # Lint, build, test, security scan
+│       └── build-deploy.yml  # Docker build and deployment
+├── docker-compose.yml    # Root-level convenience symlink to infra/
 └── Makefile              # Development convenience targets
 ```
 
@@ -76,9 +96,10 @@ make frontend-admin   # Start admin app on :3002
 
 ## Documentation
 
+- [Setup Guide](docs/setup.md) — Installation, development, Docker, CI/CD
 - [API Structure](docs/api.md) — REST endpoints and WebSocket protocol
 - [Architecture](docs/architecture.md) — System design and data flow
-- [Setup Guide](docs/setup.md) — Installation and development workflow
+- [CI/CD & Deployment](docs/cicd.md) — GitHub Actions, Docker, production deployment
 
 ## Status
 

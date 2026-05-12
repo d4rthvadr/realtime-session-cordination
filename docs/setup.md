@@ -74,6 +74,71 @@ tmux attach -t realtime
 
 ---
 
+## Docker & Docker Compose (Alternative)
+
+### Prerequisites
+
+- **Docker** — https://docs.docker.com/get-docker/
+- **Docker Compose** — https://docs.docker.com/compose/install/
+
+### Quick Start with Docker Compose
+
+```bash
+# Clone repository
+git clone https://github.com/your-org/realtime-session-coordination.git
+cd realtime-session-coordination
+
+# Start all services (docker-compose.yml available at root or infra/)
+docker-compose up --build
+
+# Services will be available at:
+# - Backend:   http://localhost:8080
+# - User App:  http://localhost:3001
+# - Admin App: http://localhost:3002
+```
+
+The `docker-compose.yml` (in root or `infra/` directory) defines three services:
+
+- **backend** — Go + Gin service on :8080
+- **user-app** — User countdown viewer on :3001
+- **admin-app** — Admin control panel on :3002
+
+Services are connected via a bridge network and auto-restart unless stopped.
+
+### Stop Services
+
+```bash
+docker-compose down
+
+# Remove volumes
+docker-compose down -v
+
+# View logs
+docker-compose logs -f backend
+docker-compose logs -f user-app
+docker-compose logs -f admin-app
+```
+
+### Build Individual Images
+
+```bash
+# Backend
+docker build -t realtime-backend -f ./infra/docker/backend/Dockerfile ./backend
+
+# User App
+docker build -t realtime-user -f ./infra/docker/frontend/Dockerfile.user ./frontend
+
+# Admin App
+docker build -t realtime-admin -f ./infra/docker/frontend/Dockerfile.admin ./frontend
+
+# Run individually
+docker run -p 8080:8080 realtime-backend
+docker run -p 3001:3001 -e NEXT_PUBLIC_BACKEND_BASE_URL=http://localhost:8080 realtime-user
+docker run -p 3002:3002 -e NEXT_PUBLIC_BACKEND_BASE_URL=http://localhost:8080 realtime-admin
+```
+
+---
+
 ## Detailed Setup
 
 ### Node.js / npm Setup
@@ -580,43 +645,197 @@ Create `.vscode/launch.json`:
 
 ---
 
-## CI/CD (Optional)
+## CI/CD (GitHub Actions)
 
-### GitHub Actions Example
+The repository includes comprehensive GitHub Actions workflows for continuous integration and deployment.
 
-Create `.github/workflows/ci.yml`:
+### Workflows Overview
+
+#### 1. CI/CD Pipeline (`ci.yml`)
+
+Runs on every push and pull request to `main` and `develop` branches.
+
+**Jobs:**
+
+- **Frontend Lint & Build** — TypeScript type checking, linting, Next.js builds
+- **Backend Lint & Build** — Go formatting, vet, golangci-lint, binary compilation
+- **Backend Tests** — Run Go test suite with race detection and coverage
+- **Security Scan** — npm audit, Trivy vulnerability scanner
+- **Integration Tests** — Basic smoke tests (optional, can be skipped)
+- **CI Status Check** — Summary and PR comment with results
+
+**Example Output:**
+
+```
+✅ CI Pipeline PASSED
+
+| Component | Status |
+|-----------|--------|
+| Frontend Lint & Build | ✅ PASSED |
+| Backend Lint & Build | ✅ PASSED |
+| Backend Tests | ✅ PASSED |
+```
+
+#### 2. Build & Deploy (`build-deploy.yml`)
+
+Runs on:
+
+- Push to `main` branch
+- Git tags matching `v*.*.*` (semantic versioning)
+- Manual workflow dispatch
+
+**Jobs:**
+
+- **Build Backend Docker** — Multi-stage Go build, push to container registry
+- **Build Frontend Docker** — Multi-stage Next.js build, push to container registry
+- **Publish Release** — Create GitHub release with auto-generated notes
+- **Deploy to Staging** — Optional deployment to staging environment
+- **Deploy to Production** — Optional deployment to production (tag-triggered)
+
+### Setting Up CI/CD
+
+#### 1. Enable GitHub Actions
+
+- Workflows are automatically enabled when repository is pushed to GitHub
+- No additional configuration needed
+
+#### 2. Configure Container Registry (Optional)
+
+For Docker image pushes, configure credentials:
+
+**GitHub Container Registry (GHCR):**
+
+- Uses `GITHUB_TOKEN` automatically (built-in)
+- Images pushed to `ghcr.io/your-org/your-repo/`
+
+**Docker Hub:**
+
+1. Create access token at https://hub.docker.com/settings/security
+2. Add secrets to GitHub repository:
+   - `DOCKERHUB_USERNAME`
+   - `DOCKERHUB_TOKEN`
+3. Update workflow to use Docker Hub registry
+
+**AWS ECR:**
+
+1. Create IAM user with ECR push permissions
+2. Add secrets to GitHub:
+   - `AWS_ACCESS_KEY_ID`
+   - `AWS_SECRET_ACCESS_KEY`
+   - `AWS_REGION`
+   - `AWS_ECR_REGISTRY`
+
+#### 3. Configure Deployment Environments (Optional)
+
+Add GitHub environments for staging/production deployments:
+
+1. Go to **Settings → Environments**
+2. Create `staging` environment
+3. Create `production` environment
+4. Add deployment secrets:
+   - Database credentials
+   - API keys
+   - SSH keys for servers
+5. Configure deployment rules (e.g., production requires approval)
+
+#### 4. Configure Slack Notifications (Optional)
+
+Add Slack webhook for deployment notifications:
+
+1. Create Slack app and webhook: https://api.slack.com/messaging/webhooks
+2. Add to GitHub secrets as `SLACK_WEBHOOK_URL`
+3. Workflows will post deployment status to Slack
+
+### Workflow Files
+
+Located in `.github/workflows/`:
+
+- **`ci.yml`** — Main CI pipeline (lint, build, test, security)
+- **`build-deploy.yml`** — Build Docker images and deploy
+
+### Local Workflow Testing
+
+Test GitHub Actions locally using **act**:
+
+```bash
+# Install act
+brew install act  # macOS
+# or https://github.com/nektos/act
+
+# Run CI workflow locally
+act push -j frontend-lint-build
+
+# Run specific job
+act -j backend-tests
+
+# View available jobs
+act -l
+```
+
+### Secrets & Variables
+
+#### Repository Secrets
+
+Add via **Settings → Secrets and variables → Actions**:
+
+```
+GITHUB_TOKEN           # Auto-provided by GitHub
+SLACK_WEBHOOK_URL      # Optional: Slack notifications
+DOCKERHUB_USERNAME     # Optional: Docker Hub
+DOCKERHUB_TOKEN        # Optional: Docker Hub
+AWS_ACCESS_KEY_ID      # Optional: AWS ECR
+AWS_SECRET_ACCESS_KEY  # Optional: AWS ECR
+```
+
+#### Workflow Variables
+
+Define in workflow files or **Settings → Variables**:
 
 ```yaml
-name: CI
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 18
-      - uses: actions/setup-go@v3
-        with:
-          go-version: 1.20
-
-      - name: Install dependencies
-        run: |
-          cd frontend && npm install
-          cd ../backend && go mod download
-
-      - name: Build frontend
-        run: cd frontend && npm run build -w @realtime/user && npm run build -w @realtime/admin
-
-      - name: Build backend
-        run: cd backend && go build -o bin/api ./cmd/api
-
-      - name: Lint (frontend)
-        run: cd frontend && npm run lint
+env:
+  NODE_VERSION: "18"
+  GO_VERSION: "1.25"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 ```
+
+### Troubleshooting CI/CD
+
+#### Workflow fails on linting
+
+Check linting locally:
+
+```bash
+cd frontend && npm run lint
+cd ../backend && go vet ./...
+```
+
+#### Build fails with "out of memory"
+
+Increase runner memory or split jobs:
+
+- Use `runs-on: ubuntu-latest-xl` (more expensive)
+- Split frontend/backend into separate workflows
+
+#### Docker build times out
+
+Enable caching:
+
+```yaml
+cache-from: type=gha
+cache-to: type=gha,mode=max
+```
+
+Or use `docker layer caching` (paid feature).
+
+#### Deployment fails silently
+
+Check workflow logs:
+
+1. GitHub → Actions tab
+2. Select workflow run
+3. Expand failed job
+4. Review error messages
 
 ---
 
@@ -626,6 +845,7 @@ jobs:
 2. **Explore API** — Read [api.md](api.md)
 3. **Make Code Changes** — Follow development workflow above
 4. **Test End-to-End** — Create session, start countdown, verify sync
-5. **Deploy** — Build binaries and deploy to server (see deployment guides)
+5. **Setup CI/CD** — Push to GitHub and workflows will run automatically
+6. **Deploy** — Use build-deploy workflow to push Docker images and deploy
 
 For questions or issues, check the main [README.md](../README.md) or open an issue on GitHub.
