@@ -1,27 +1,33 @@
 "use client";
 
 import { useEffect } from "react";
+import { buildUserApiUrl, buildUserWsUrl } from "@/lib/backend";
 import { useSessionStore, type SessionSnapshot } from "@/store/sessionStore";
 
-interface MockEvent {
-  delayMs: number;
-  payload: Partial<SessionSnapshot>;
+interface BackendSessionSnapshot {
+  id: string;
+  title: string;
+  speakerName: string;
+  durationSeconds: number;
+  remainingSeconds: number;
+  status: SessionSnapshot["status"];
+  createdAt?: string;
 }
 
-const MOCK_EVENTS: MockEvent[] = [
-  {
-    delayMs: 1000,
-    payload: {
-      status: "LIVE",
-    },
-  },
-  {
-    delayMs: 1500,
-    payload: {
-      serverRemainingSeconds: 24 * 60 + 35,
-    },
-  },
-];
+interface BackendSessionResponse {
+  session: BackendSessionSnapshot;
+}
+
+function normalizeSnapshot(snapshot: BackendSessionSnapshot): SessionSnapshot {
+  return {
+    title: snapshot.title,
+    speakerName: snapshot.speakerName,
+    durationSeconds: snapshot.durationSeconds,
+    serverRemainingSeconds: snapshot.remainingSeconds,
+    status: snapshot.status,
+    serverNowMs: Date.now(),
+  };
+}
 
 export function useSessionSocket(sessionId: string): void {
   const setSnapshot = useSessionStore((state) => state.setSnapshot);
@@ -31,39 +37,88 @@ export function useSessionSocket(sessionId: string): void {
 
   useEffect(() => {
     let cancelled = false;
-    const timers: NodeJS.Timeout[] = [];
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    setConnectionState("connecting");
+    const connect = async () => {
+      setConnectionState("connecting");
 
-    timers.push(
-      setTimeout(() => {
-        if (cancelled) {
-          return;
+      try {
+        const response = await fetch(
+          buildUserApiUrl(`/api/v1/sessions/${sessionId}`),
+        );
+        if (!response.ok) {
+          throw new Error(`failed to load session ${sessionId}`);
         }
-        setConnectionState("connected-mock");
-      }, 200),
-    );
 
-    for (const event of MOCK_EVENTS) {
-      timers.push(
-        setTimeout(() => {
+        const payload = (await response.json()) as BackendSessionResponse;
+        if (!cancelled) {
+          setSnapshot(normalizeSnapshot(payload.session));
+        }
+
+        const wsUrl = buildUserWsUrl(`/ws/sessions/${sessionId}`);
+        socket = new WebSocket(wsUrl);
+
+        socket.onopen = () => {
+          if (!cancelled) {
+            setConnectionState("connected");
+          }
+        };
+
+        socket.onmessage = (event) => {
           if (cancelled) {
             return;
           }
 
-          setSnapshot({
-            ...event.payload,
-            title: `Session ${sessionId}`,
-            speakerName: "TBD Speaker",
-          });
-        }, event.delayMs),
-      );
-    }
+          try {
+            const message = JSON.parse(String(event.data)) as {
+              type?: string;
+              session?: BackendSessionResponse["session"];
+            };
+
+            if (message.session) {
+              setSnapshot(normalizeSnapshot(message.session));
+              return;
+            }
+          } catch {
+            // Ignore malformed messages during the smoke phase.
+          }
+        };
+
+        socket.onclose = () => {
+          if (cancelled) {
+            return;
+          }
+
+          setConnectionState("disconnected");
+          reconnectTimer = setTimeout(() => {
+            if (!cancelled) {
+              void connect();
+            }
+          }, 2000);
+        };
+
+        socket.onerror = () => {
+          if (!cancelled) {
+            setConnectionState("disconnected");
+          }
+        };
+      } catch {
+        if (!cancelled) {
+          setConnectionState("disconnected");
+        }
+      }
+    };
+
+    void connect();
 
     return () => {
       cancelled = true;
-      for (const timer of timers) {
-        clearTimeout(timer);
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      if (socket) {
+        socket.close();
       }
     };
   }, [sessionId, setConnectionState, setSnapshot]);
