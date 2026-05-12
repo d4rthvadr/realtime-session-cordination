@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 )
 
@@ -64,12 +63,17 @@ type CreateInput struct {
 }
 
 type Manager struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session
+	store Store
 }
 
-func NewManager() *Manager {
-	return &Manager{sessions: make(map[string]*Session)}
+// NewManager creates a new Manager with the given Store implementation.
+func NewManager(store Store) *Manager {
+	return &Manager{store: store}
+}
+
+// NewManagerWithMemory creates a Manager with an in-memory store (for backward compatibility).
+func NewManagerWithMemory() *Manager {
+	return NewManager(NewMemoryStore())
 }
 
 func (m *Manager) Create(input CreateInput) (Snapshot, string, error) {
@@ -94,45 +98,32 @@ func (m *Manager) Create(input CreateInput) (Snapshot, string, error) {
 		CreatedAt:       now,
 	}
 
-	m.mu.Lock()
-	m.sessions[s.ID] = s
-	m.mu.Unlock()
+	_, err = m.store.Create(s)
+	if err != nil {
+		return Snapshot{}, "", err
+	}
 
 	return buildSnapshot(s, now), token, nil
 }
 
 func (m *Manager) GetSnapshot(id string) (Snapshot, error) {
-	m.mu.RLock()
-	s, ok := m.sessions[id]
-	m.mu.RUnlock()
-	if !ok {
-		return Snapshot{}, ErrNotFound
+	s, err := m.store.Get(id)
+	if err != nil {
+		return Snapshot{}, err
 	}
 	return buildSnapshot(s, time.Now().UTC()), nil
 }
 
 func (m *Manager) ValidateControlToken(id, token string) error {
-	m.mu.RLock()
-	s, ok := m.sessions[id]
-	m.mu.RUnlock()
-	if !ok {
-		return ErrNotFound
-	}
-	if token == "" || s.ControlToken != token {
-		return ErrUnauthorized
-	}
-	return nil
+	return m.store.ValidateControlToken(id, token)
 }
 
 func (m *Manager) Start(id string) (Event, error) {
 	now := time.Now().UTC()
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	s, ok := m.sessions[id]
-	if !ok {
-		return Event{}, ErrNotFound
+	s, err := m.store.Get(id)
+	if err != nil {
+		return Event{}, err
 	}
 	if s.Status != StatusCreated {
 		return Event{}, ErrInvalidTransition
@@ -142,6 +133,10 @@ func (m *Manager) Start(id string) (Event, error) {
 	s.StartedAt = &now
 	s.PausedAt = nil
 
+	if err = m.store.Update(s); err != nil {
+		return Event{}, err
+	}
+
 	snapshot := buildSnapshot(s, now)
 	return Event{Type: "SESSION_STARTED", Session: snapshot, StartedAt: now.Unix()}, nil
 }
@@ -149,12 +144,9 @@ func (m *Manager) Start(id string) (Event, error) {
 func (m *Manager) Pause(id string) (Event, error) {
 	now := time.Now().UTC()
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	s, ok := m.sessions[id]
-	if !ok {
-		return Event{}, ErrNotFound
+	s, err := m.store.Get(id)
+	if err != nil {
+		return Event{}, err
 	}
 	if s.Status != StatusLive {
 		return Event{}, ErrInvalidTransition
@@ -163,6 +155,10 @@ func (m *Manager) Pause(id string) (Event, error) {
 	s.Status = StatusPaused
 	s.PausedAt = &now
 
+	if err = m.store.Update(s); err != nil {
+		return Event{}, err
+	}
+
 	snapshot := buildSnapshot(s, now)
 	return Event{Type: "SESSION_PAUSED", Session: snapshot}, nil
 }
@@ -170,12 +166,9 @@ func (m *Manager) Pause(id string) (Event, error) {
 func (m *Manager) Resume(id string) (Event, error) {
 	now := time.Now().UTC()
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	s, ok := m.sessions[id]
-	if !ok {
-		return Event{}, ErrNotFound
+	s, err := m.store.Get(id)
+	if err != nil {
+		return Event{}, err
 	}
 	if s.Status != StatusPaused || s.PausedAt == nil {
 		return Event{}, ErrInvalidTransition
@@ -186,6 +179,10 @@ func (m *Manager) Resume(id string) (Event, error) {
 	s.PausedAt = nil
 	s.Status = StatusLive
 
+	if err = m.store.Update(s); err != nil {
+		return Event{}, err
+	}
+
 	snapshot := buildSnapshot(s, now)
 	return Event{Type: "SESSION_RESUMED", Session: snapshot}, nil
 }
@@ -193,12 +190,9 @@ func (m *Manager) Resume(id string) (Event, error) {
 func (m *Manager) End(id string) (Event, error) {
 	now := time.Now().UTC()
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	s, ok := m.sessions[id]
-	if !ok {
-		return Event{}, ErrNotFound
+	s, err := m.store.Get(id)
+	if err != nil {
+		return Event{}, err
 	}
 	if s.Status != StatusLive && s.Status != StatusPaused {
 		return Event{}, ErrInvalidTransition
@@ -209,6 +203,10 @@ func (m *Manager) End(id string) (Event, error) {
 	s.Status = StatusEnded
 	s.PausedAt = nil
 
+	if err = m.store.Update(s); err != nil {
+		return Event{}, err
+	}
+
 	snapshot := buildSnapshot(s, now)
 	return Event{Type: "SESSION_ENDED", Session: snapshot}, nil
 }
@@ -216,27 +214,26 @@ func (m *Manager) End(id string) (Event, error) {
 func (m *Manager) AdjustTime(id string, deltaSeconds int) (Event, error) {
 	now := time.Now().UTC()
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	s, ok := m.sessions[id]
-	if !ok {
-		return Event{}, ErrNotFound
+	s, err := m.store.Get(id)
+	if err != nil {
+		return Event{}, err
 	}
 	if s.Status == StatusEnded {
 		return Event{}, ErrInvalidTransition
 	}
 
 	s.AdjustmentSeconds += deltaSeconds
+
+	if err = m.store.Update(s); err != nil {
+		return Event{}, err
+	}
+
 	snapshot := buildSnapshot(s, now)
 	return Event{Type: "TIME_ADJUSTED", Session: snapshot, DeltaSeconds: deltaSeconds}, nil
 }
 
 func (m *Manager) SessionExists(id string) bool {
-	m.mu.RLock()
-	_, ok := m.sessions[id]
-	m.mu.RUnlock()
-	return ok
+	return m.store.SessionExists(id)
 }
 
 func buildSnapshot(s *Session, now time.Time) Snapshot {

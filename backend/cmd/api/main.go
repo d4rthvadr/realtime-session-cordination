@@ -17,7 +17,7 @@ func main() {
 		port = "8080"
 	}
 
-	manager := session.NewManager()
+	manager := session.NewManager(session.NewMemoryStore())
 	hub := ws.NewHub()
 	handler := api.NewHandler(manager, hub)
 
