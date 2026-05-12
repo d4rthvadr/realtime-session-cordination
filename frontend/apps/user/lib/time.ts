@@ -4,8 +4,18 @@ export interface TimerState {
   colorClass: string;
 }
 
-export function formatDuration(totalSeconds: number): string {
-  const absSeconds = Math.max(0, Math.floor(Math.abs(totalSeconds)));
+export function formatDuration(
+  totalSeconds: number | string | null | undefined,
+  fallback = "--:--",
+): string {
+  const parsed =
+    typeof totalSeconds === "number" ? totalSeconds : Number(totalSeconds);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  const absSeconds = Math.max(0, Math.floor(Math.abs(parsed)));
   const mins = Math.floor(absSeconds / 60)
     .toString()
     .padStart(2, "0");
@@ -17,6 +27,14 @@ export function getTimerState(
   remainingSeconds: number,
   durationSeconds: number,
 ): TimerState {
+  if (!Number.isFinite(remainingSeconds) || !Number.isFinite(durationSeconds)) {
+    return {
+      level: "critical",
+      label: "Critical",
+      colorClass: "text-critical",
+    };
+  }
+
   if (remainingSeconds < 0) {
     return {
       level: "overtime",
