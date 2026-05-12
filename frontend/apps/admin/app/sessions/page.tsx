@@ -1,62 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { buildAdminApiUrl } from "@/lib/backend";
 import { formatClock } from "@/lib/session";
-
-type SessionStatus = "CREATED" | "LIVE" | "PAUSED" | "ENDED";
-
-interface SessionSnapshot {
-  id: string;
-  title: string;
-  speakerName: string;
-  durationSeconds: number;
-  status: SessionStatus;
-  remainingSeconds: number;
-  createdAt?: string;
-}
+import { useSessionsList } from "@/hooks/useSessionsList";
 
 export default function SessionsListPage() {
-  const [sessions, setSessions] = useState<SessionSnapshot[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadSessions = async () => {
-      try {
-        setIsLoading(true);
-        const response = await fetch(buildAdminApiUrl("/api/v1/sessions"));
-        if (!response.ok) {
-          throw new Error("failed to fetch sessions");
-        }
-
-        const payload = (await response.json()) as {
-          sessions: SessionSnapshot[];
-        };
-        if (!cancelled) {
-          setSessions(payload.sessions || []);
-          setError(null);
-        }
-      } catch {
-        if (!cancelled) {
-          setError("Could not load sessions from backend.");
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    void loadSessions();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { sessions, isLoading, error } = useSessionsList();
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-100 to-white px-6 py-10">

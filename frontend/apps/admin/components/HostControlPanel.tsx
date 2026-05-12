@@ -1,18 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { buildAdminApiUrl, getViewerUrl } from "@/lib/backend";
+import { getViewerUrl } from "@/lib/backend";
 import { formatClock } from "@/lib/session";
-
-interface SessionSnapshot {
-  id: string;
-  title: string;
-  speakerName: string;
-  durationSeconds: number;
-  status: "CREATED" | "LIVE" | "PAUSED" | "ENDED";
-  remainingSeconds: number;
-  createdAt?: string;
-}
+import { useSessionActions } from "@/hooks/useSessionActions";
+import { useSessionSnapshot } from "@/hooks/useSessionSnapshot";
 
 interface HostControlPanelProps {
   sessionId: string;
@@ -21,43 +13,17 @@ interface HostControlPanelProps {
 type ActionState = "idle" | "loading" | "error";
 
 export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
-  const [session, setSession] = useState<SessionSnapshot | null>(null);
-  const [actionState, setActionState] = useState<ActionState>("idle");
-  const [message, setMessage] = useState<string | null>(null);
+  const {
+    session,
+    setSession,
+    error: loadError,
+  } = useSessionSnapshot(sessionId);
   const [controlToken, setControlToken] = useState<string | null>(null);
+  const { actionState, actionError, runAction, clearActionError } =
+    useSessionActions(controlToken);
 
   useEffect(() => {
     setControlToken(window.sessionStorage.getItem(`controlToken:${sessionId}`));
-  }, [sessionId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadSession = async () => {
-      try {
-        const response = await fetch(
-          buildAdminApiUrl(`/api/v1/sessions/${sessionId}`),
-        );
-        if (!response.ok) {
-          throw new Error("session not found");
-        }
-
-        const payload = (await response.json()) as { session: SessionSnapshot };
-        if (!cancelled) {
-          setSession(payload.session);
-        }
-      } catch {
-        if (!cancelled) {
-          setMessage("Could not load session state from the backend.");
-        }
-      }
-    };
-
-    void loadSession();
-
-    return () => {
-      cancelled = true;
-    };
   }, [sessionId]);
 
   useEffect(() => {
@@ -78,53 +44,22 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [session]);
+  }, [session, setSession]);
 
   const viewerLink = useMemo(() => getViewerUrl(sessionId), [sessionId]);
 
-  const authorizedFetch = async (path: string, init: RequestInit = {}) => {
-    if (!controlToken) {
-      throw new Error("Missing control token for this session");
-    }
-
-    const response = await fetch(buildAdminApiUrl(path), {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Control-Token": controlToken,
-        ...(init.headers || {}),
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
-
-    return response;
-  };
-
-  const runAction = async (path: string, body?: unknown) => {
-    setActionState("loading");
-    setMessage(null);
-
-    try {
-      const response = await authorizedFetch(path, {
-        method: "POST",
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const payload = (await response.json()) as { session: SessionSnapshot };
-      setSession(payload.session);
-      setActionState("idle");
-    } catch (error) {
-      setActionState("error");
-      setMessage(error instanceof Error ? error.message : "Action failed");
+  const onRunAction = async (path: string, body?: unknown) => {
+    clearActionError();
+    const updated = await runAction(path, body);
+    if (updated) {
+      setSession(updated);
     }
   };
 
   if (!session) {
     return (
       <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-800">
-        {message || "Loading session from the backend..."}
+        {loadError || "Loading session from the backend..."}
       </div>
     );
   }
@@ -154,33 +89,41 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
         </p>
       </div>
 
-      {message ? <p className="text-sm text-rose-700">{message}</p> : null}
+      {actionError ? (
+        <p className="text-sm text-rose-700">{actionError}</p>
+      ) : null}
 
       <div className="grid gap-2 sm:grid-cols-2">
         <button
           disabled={!canStart || actionState === "loading"}
-          onClick={() => void runAction(`/api/v1/sessions/${sessionId}/start`)}
+          onClick={() =>
+            void onRunAction(`/api/v1/sessions/${sessionId}/start`)
+          }
           className="rounded-md bg-emerald-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           Start
         </button>
         <button
           disabled={!canPause || actionState === "loading"}
-          onClick={() => void runAction(`/api/v1/sessions/${sessionId}/pause`)}
+          onClick={() =>
+            void onRunAction(`/api/v1/sessions/${sessionId}/pause`)
+          }
           className="rounded-md bg-amber-500 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           Pause
         </button>
         <button
           disabled={!canResume || actionState === "loading"}
-          onClick={() => void runAction(`/api/v1/sessions/${sessionId}/resume`)}
+          onClick={() =>
+            void onRunAction(`/api/v1/sessions/${sessionId}/resume`)
+          }
           className="rounded-md bg-sky-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           Resume
         </button>
         <button
           disabled={!canEnd || actionState === "loading"}
-          onClick={() => void runAction(`/api/v1/sessions/${sessionId}/end`)}
+          onClick={() => void onRunAction(`/api/v1/sessions/${sessionId}/end`)}
           className="rounded-md bg-rose-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           End
@@ -191,7 +134,7 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
         <button
           disabled={actionState === "loading"}
           onClick={() =>
-            void runAction(`/api/v1/sessions/${sessionId}/adjust-time`, {
+            void onRunAction(`/api/v1/sessions/${sessionId}/adjust-time`, {
               deltaSeconds: 60,
             })
           }
@@ -202,7 +145,7 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
         <button
           disabled={actionState === "loading"}
           onClick={() =>
-            void runAction(`/api/v1/sessions/${sessionId}/adjust-time`, {
+            void onRunAction(`/api/v1/sessions/${sessionId}/adjust-time`, {
               deltaSeconds: -60,
             })
           }

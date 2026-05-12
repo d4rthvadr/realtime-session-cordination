@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { buildAdminApiUrl } from "@/lib/backend";
 import { parseDurationToSeconds } from "@/lib/session";
+import { useCreateSession } from "@/hooks/useCreateSession";
 
 export default function SessionCreateForm() {
   const router = useRouter();
@@ -11,53 +11,35 @@ export default function SessionCreateForm() {
   const [title, setTitle] = useState("Kubernetes Workshop");
   const [speakerName, setSpeakerName] = useState("John Doe");
   const [durationMinutes, setDurationMinutes] = useState("30");
-  const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const { createSession, isSubmitting, error, clearError } = useCreateSession();
 
   const onSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setIsSubmitting(true);
+    setValidationError(null);
+    clearError();
 
     const durationSeconds = parseDurationToSeconds(durationMinutes);
     if (!title.trim() || !speakerName.trim() || durationSeconds <= 0) {
-      setError("Please provide title, speaker, and a valid positive duration.");
-      setIsSubmitting(false);
+      setValidationError(
+        "Please provide title, speaker, and a valid positive duration.",
+      );
       return;
     }
 
-    try {
-      const response = await fetch(buildAdminApiUrl("/api/v1/sessions"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          title: title.trim(),
-          speakerName: speakerName.trim(),
-          durationSeconds,
-        }),
-      });
+    const payload = await createSession({
+      title: title.trim(),
+      speakerName: speakerName.trim(),
+      durationSeconds,
+    });
 
-      if (!response.ok) {
-        throw new Error("Failed to create session");
-      }
-
-      const payload = (await response.json()) as {
-        session: { id: string };
-        controlToken: string;
-      };
-
+    if (payload) {
       window.sessionStorage.setItem(
         `controlToken:${payload.session.id}`,
         payload.controlToken,
       );
 
-      setError(null);
       router.push(`/sessions/${payload.session.id}`);
-    } catch {
-      setError("Could not create the session in the backend.");
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -111,6 +93,9 @@ export default function SessionCreateForm() {
         />
       </label>
 
+      {validationError ? (
+        <p className="text-sm text-red-700">{validationError}</p>
+      ) : null}
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
 
       <button
