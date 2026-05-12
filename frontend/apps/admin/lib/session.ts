@@ -1,6 +1,16 @@
-export function formatClock(totalSeconds: number): string {
-  const sign = totalSeconds < 0 ? "-" : "";
-  const abs = Math.floor(Math.abs(totalSeconds));
+export function formatClock(
+  totalSeconds: number | string | null | undefined,
+  fallback = "--:--",
+): string {
+  const parsed =
+    typeof totalSeconds === "number" ? totalSeconds : Number(totalSeconds);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  const sign = parsed < 0 ? "-" : "";
+  const abs = Math.floor(Math.abs(parsed));
   const mins = Math.floor(abs / 60)
     .toString()
     .padStart(2, "0");

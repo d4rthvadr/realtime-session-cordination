@@ -1,11 +1,27 @@
 "use client";
 
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { formatClock } from "@/lib/session";
-import { useSessionsList } from "@/hooks/useSessionsList";
+import { getSessionsList, SessionSnapshot } from "@/lib/actions";
 
 export default function SessionsListPage() {
-  const { sessions, isLoading, error } = useSessionsList();
+  const [sessions, setSessions] = useState<SessionSnapshot[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    startTransition(async () => {
+      const result = await getSessionsList();
+      if (result.error) {
+        setError(result.error);
+      } else {
+        setSessions(result.sessions);
+      }
+    });
+  }, []);
+
+  const isLoading = isPending && sessions.length === 0;
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-100 to-white px-6 py-10">
@@ -64,13 +80,7 @@ export default function SessionsListPage() {
                       Speaker: {session.speakerName}
                     </p>
                     <p className="text-sm text-slate-500">
-                      Session ID: {session.id}
-                    </p>
-                    <p className="text-sm text-slate-500">
-                      Created:{" "}
-                      {session.createdAt
-                        ? new Date(session.createdAt).toLocaleString()
-                        : "-"}
+                      Created: {new Date(session.createdAt).toLocaleString()}
                     </p>
                   </div>
 
@@ -82,7 +92,7 @@ export default function SessionsListPage() {
                       {session.status}
                     </p>
                     <p className="mt-2 text-xs uppercase tracking-[0.12em] text-slate-500">
-                      Remaining
+                      Time Remaining
                     </p>
                     <p className="text-xl font-bold text-slate-900">
                       {formatClock(session.remainingSeconds)}

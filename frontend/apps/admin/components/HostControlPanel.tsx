@@ -1,33 +1,47 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { getViewerUrl } from "@/lib/backend";
 import { formatClock } from "@/lib/session";
-import { useSessionActions } from "@/hooks/useSessionActions";
-import { useSessionSnapshot } from "@/hooks/useSessionSnapshot";
+import {
+  getSessionSnapshot,
+  startSession,
+  pauseSession,
+  resumeSession,
+  endSession,
+  adjustSessionTime,
+  SessionSnapshot,
+} from "@/lib/actions";
 
 interface HostControlPanelProps {
   sessionId: string;
 }
 
-type ActionState = "idle" | "loading" | "error";
-
 export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
-  const {
-    session,
-    setSession,
-    error: loadError,
-  } = useSessionSnapshot(sessionId);
+  const [session, setSession] = useState<SessionSnapshot | null>(null);
   const [controlToken, setControlToken] = useState<string | null>(null);
-  const { actionState, actionError, runAction, clearActionError } =
-    useSessionActions(controlToken);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
 
+  // Load initial session and control token
   useEffect(() => {
-    setControlToken(window.sessionStorage.getItem(`controlToken:${sessionId}`));
+    const token = window.sessionStorage.getItem(`controlToken:${sessionId}`);
+    setControlToken(token);
+
+    startTransition(async () => {
+      const result = await getSessionSnapshot(sessionId);
+      if (result.error) {
+        setLoadError(result.error);
+      } else if (result.session) {
+        setSession(result.session);
+      }
+    });
   }, [sessionId]);
 
+  // Auto-decrement time when session is running
   useEffect(() => {
-    if (!session || session.status === "ENDED") {
+    if (!session || session.status !== "LIVE") {
       return;
     }
 
@@ -38,22 +52,35 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
         }
         return {
           ...current,
-          remainingSeconds: current.remainingSeconds - 1,
+          remainingSeconds: Math.max(0, current.remainingSeconds - 1),
         };
       });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [session, setSession]);
+  }, [session, session?.status]);
 
   const viewerLink = useMemo(() => getViewerUrl(sessionId), [sessionId]);
 
-  const onRunAction = async (path: string, body?: unknown) => {
-    clearActionError();
-    const updated = await runAction(path, body);
-    if (updated) {
-      setSession(updated);
+  const handleAction = async (
+    action: (
+      token: string,
+    ) => Promise<{ session: SessionSnapshot | null; error: string | null }>,
+  ) => {
+    if (!controlToken) {
+      setActionError("No control token available");
+      return;
     }
+
+    setActionError(null);
+    startTransition(async () => {
+      const result = await action(controlToken);
+      if (result.error) {
+        setActionError(result.error);
+      } else if (result.session) {
+        setSession(result.session);
+      }
+    });
   };
 
   if (!session) {
@@ -74,7 +101,7 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
       <header>
         <h2 className="text-xl font-semibold text-slate-900">Host Controls</h2>
         <p className="text-sm text-slate-600">
-          Session: {session.title} · Speaker: {session.speakerName}
+          {session.title} • {session.speakerName}
         </p>
       </header>
 
@@ -83,9 +110,9 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
         <p className="text-2xl font-semibold text-slate-900">
           {session.status}
         </p>
-        <p className="mt-2 text-sm text-slate-500">Remaining</p>
+        <p className="mt-2 text-sm text-slate-500">Time Remaining</p>
         <p className="text-3xl font-bold text-slate-900">
-          {formatClock(session.remainingSeconds)}
+          {formatClock(session.remainingSeconds, "--:--")}
         </p>
       </div>
 
@@ -95,35 +122,35 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
 
       <div className="grid gap-2 sm:grid-cols-2">
         <button
-          disabled={!canStart || actionState === "loading"}
+          disabled={!canStart || isPending}
           onClick={() =>
-            void onRunAction(`/api/v1/sessions/${sessionId}/start`)
+            handleAction((token) => startSession(sessionId, token))
           }
           className="rounded-md bg-emerald-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           Start
         </button>
         <button
-          disabled={!canPause || actionState === "loading"}
+          disabled={!canPause || isPending}
           onClick={() =>
-            void onRunAction(`/api/v1/sessions/${sessionId}/pause`)
+            handleAction((token) => pauseSession(sessionId, token))
           }
           className="rounded-md bg-amber-500 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           Pause
         </button>
         <button
-          disabled={!canResume || actionState === "loading"}
+          disabled={!canResume || isPending}
           onClick={() =>
-            void onRunAction(`/api/v1/sessions/${sessionId}/resume`)
+            handleAction((token) => resumeSession(sessionId, token))
           }
           className="rounded-md bg-sky-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           Resume
         </button>
         <button
-          disabled={!canEnd || actionState === "loading"}
-          onClick={() => void onRunAction(`/api/v1/sessions/${sessionId}/end`)}
+          disabled={!canEnd || isPending}
+          onClick={() => handleAction((token) => endSession(sessionId, token))}
           className="rounded-md bg-rose-600 px-4 py-2 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           End
@@ -132,22 +159,22 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
 
       <div className="grid gap-2 sm:grid-cols-2">
         <button
-          disabled={actionState === "loading"}
+          disabled={isPending}
           onClick={() =>
-            void onRunAction(`/api/v1/sessions/${sessionId}/adjust-time`, {
-              deltaSeconds: 60,
-            })
+            handleAction((token) =>
+              adjustSessionTime(sessionId, { deltaSeconds: 60 }, token),
+            )
           }
           className="rounded-md border border-slate-300 px-4 py-2 font-medium text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-100"
         >
           +60 seconds
         </button>
         <button
-          disabled={actionState === "loading"}
+          disabled={isPending}
           onClick={() =>
-            void onRunAction(`/api/v1/sessions/${sessionId}/adjust-time`, {
-              deltaSeconds: -60,
-            })
+            handleAction((token) =>
+              adjustSessionTime(sessionId, { deltaSeconds: -60 }, token),
+            )
           }
           className="rounded-md border border-slate-300 px-4 py-2 font-medium text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-100"
         >
