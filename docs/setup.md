@@ -300,6 +300,9 @@ go build -o bin/api ./cmd/api
 
 - `PORT` — server port (default: 8080)
 - `GIN_MODE` — `debug` or `release` (default: debug)
+- `DB_DRIVER` — session store driver (`sqlite` or `memory`, default: `sqlite`)
+- `SQLITE_DB_PATH` — SQLite database file path (default: `./sessions.db`)
+- `CORS_ALLOW_ORIGIN` — allowed CORS origin (default: `*`)
 
 ### User App (Next.js)
 
@@ -367,13 +370,13 @@ npm run start -w @realtime/admin
 # Backend API base URL
 NEXT_PUBLIC_BACKEND_BASE_URL=http://localhost:8080
 
-# WebSocket URL (auto-derived from BACKEND_BASE_URL)
-# NEXT_PUBLIC_BACKEND_WS_URL=ws://localhost:8080
+# Used by admin app to generate viewer links
+NEXT_PUBLIC_USER_APP_URL=http://localhost:3001
 ```
 
 ### Backend
 
-**File:** `backend/.env.local` (optional, Go reads from environment)
+**File:** `backend/.env` (loaded automatically at startup)
 
 ```env
 # Server port
@@ -381,7 +384,20 @@ PORT=8080
 
 # Gin mode (debug or release)
 GIN_MODE=debug
+
+# Session store
+DB_DRIVER=sqlite
+SQLITE_DB_PATH=./sessions.db
+
+# CORS
+CORS_ALLOW_ORIGIN=*
 ```
+
+### Local vs Docker Environment Behavior
+
+- **Local backend (`go run ./cmd/api`)**: Loads `backend/.env` through `godotenv`.
+- **Local frontend (`npm run dev -w ...`)**: Uses `frontend/.env.local` for `NEXT_PUBLIC_*` values.
+- **Docker Compose**: Reads values from `environment:` blocks in compose files unless explicitly switched to `env_file`.
 
 ---
 

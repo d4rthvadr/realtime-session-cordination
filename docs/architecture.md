@@ -60,7 +60,7 @@ The Realtime Session Coordination Platform is a three-tier system:
 
 - `CountdownBoard.tsx` — Main countdown display with urgency states
 - `useSessionSocket.ts` — WebSocket hook managing connection and state sync
-- `sessionStore.ts` — Zustand store for session state and local tick logic
+- `sessionStore.ts` — Zustand store for session snapshot and connection state
 - `time.ts` — Utility functions for duration formatting and timer state calculation
 - `backend.ts` — API client builders
 
@@ -70,9 +70,8 @@ The Realtime Session Coordination Platform is a three-tier system:
 2. Store initialized with `ServerSnapshot` (id, title, speaker, duration, status, remainingSeconds)
 3. WebSocket connects to `ws://localhost:8080/ws/sessions/:id`
 4. Receives `SESSION_SNAPSHOT` on connect (broadcasts current state)
-5. Client-side interval tick decrements `remainingSeconds` every 100ms
-6. On WebSocket `SESSION_UPDATE`, snapshot replaces client state (re-sync with server truth)
-7. UI renders countdown with urgency color based on remaining time
+5. On WebSocket `SESSION_UPDATE`, snapshot replaces client state (server-authoritative)
+6. UI renders countdown with urgency color based on remaining time
    - Green (safe): > 25% of duration
    - Yellow (warning): 10-25% of duration
    - Red (critical): < 10% of duration
@@ -102,8 +101,7 @@ interface SessionState {
 **Synchronization Strategy:**
 
 - **Server authoritative:** All timing originates from backend
-- **Local tick:** Client decrements `remainingSeconds` every 100ms for smooth UI
-- **Periodic re-sync:** WebSocket updates correct any clock drift
+- **Snapshot-driven UI:** Client renders server snapshots and websocket updates
 - **Reconnect handling:** On WebSocket reconnect, loads fresh session state and re-establishes connection
 
 ---
@@ -353,7 +351,7 @@ User App                              Backend
 - **Build Target:** Go binary
 - **Port:** Configurable via environment (default 8080)
 - **CORS:** Currently allows all origins (should restrict in production)
-- **Session Persistence:** In-memory only (resets on restart; add database for persistence)
+- **Session Persistence:** SQLite by default via configurable store abstraction (`DB_DRIVER=sqlite`)
 
 ### Network
 
@@ -367,7 +365,7 @@ User App                              Backend
 
 ### Future Features
 
-1. **Database Persistence** — Replace in-memory store with database
+1. **Postgres Adapter** — Add Postgres store implementation using the existing store interface
 2. **Authentication** — Add user accounts and session ownership
 3. **Analytics** — Track session metrics and viewer engagement
 4. **Recording** — Store countdown timeline and events
@@ -382,9 +380,9 @@ User App                              Backend
 
 ## Performance Notes
 
-- **In-Memory Session Store:** O(1) lookups, scales well for ~1000 concurrent sessions
+- **SQLite Session Store:** Durable single-instance persistence with low operational overhead
 - **WebSocket Broadcasting:** Fan-out pattern scales linearly with connected clients per session
-- **Local Client Tick:** 100ms interval balances smoothness vs CPU usage
+- **Server-Authoritative Timing:** Snapshot-based updates avoid client clock drift issues
 - **Server Snapshot Frequency:** Broadcasting only on state changes, not on every tick
 
 For high-scale deployments (10k+ concurrent sessions), consider:

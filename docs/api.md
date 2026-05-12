@@ -353,12 +353,15 @@ Unexpected server error:
 **Frontend:**
 
 - `NEXT_PUBLIC_BACKEND_BASE_URL`: Backend API base URL (default: `http://localhost:8080`)
-- `NEXT_PUBLIC_BACKEND_WS_URL`: Backend WebSocket base URL (derived from `NEXT_PUBLIC_BACKEND_BASE_URL`, changing `http://` to `ws://`)
+- `NEXT_PUBLIC_USER_APP_URL`: Viewer app origin used by admin UI to generate share links (default: `http://localhost:3001`)
 
 **Backend:**
 
 - `PORT`: Server port (default: `8080`)
 - `GIN_MODE`: Gin logging mode (`debug` or `release`)
+- `DB_DRIVER`: Session store driver (`sqlite` or `memory`, default: `sqlite`)
+- `SQLITE_DB_PATH`: SQLite database file path (default: `./sessions.db`)
+- `CORS_ALLOW_ORIGIN`: Allowed CORS origin (default: `*`)
 
 ---
 
