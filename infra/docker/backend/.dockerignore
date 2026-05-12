@@ -1,0 +1,30 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Build outputs
+bin
+dist
+*.o
+*.a
+
+# Development
+.env.local
+.env.development
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+coverage.out
+*.test
+*.prof
+
+# Other
+README.md
+.editorconfig
+Makefile

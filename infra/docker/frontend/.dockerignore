@@ -1,0 +1,35 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Dependencies
+node_modules
+npm-debug.log
+pnpm-lock.yaml
+
+# Build outputs
+dist
+.next
+build
+coverage
+
+# Development
+.env.local
+.env.development
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.nyc_output
+*.test.js
+*.spec.js
+
+# Other
+README.md
+.editorconfig
+.prettierrc
