@@ -1,4 +1,5 @@
-import HostControlPanel from "@/components/HostControlPanel";
+import HostControlPanel from "../../../components/HostControlPanel";
+import Link from "next/link";
 
 interface SessionPageProps {
   params: {
@@ -15,6 +16,12 @@ export default function SessionAdminPage({ params }: SessionPageProps) {
             Host Session Controls
           </p>
           <h1 className="text-3xl font-bold text-slate-900">Session Admin</h1>
+          <Link
+            href="/sessions"
+            className="mt-2 inline-flex text-sm font-medium text-sky-700 underline"
+          >
+            Back to Sessions List
+          </Link>
         </header>
         <HostControlPanel sessionId={params.sessionId} />
       </section>

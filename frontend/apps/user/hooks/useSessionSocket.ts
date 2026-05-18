@@ -34,11 +34,17 @@ export function useSessionSocket(sessionId: string): void {
   const setConnectionState = useSessionStore(
     (state) => state.setConnectionState,
   );
+  const setSessionNotFound = useSessionStore(
+    (state) => state.setSessionNotFound,
+  );
+  const resetSession = useSessionStore((state) => state.resetSession);
 
   useEffect(() => {
     let cancelled = false;
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    resetSession();
 
     const connect = async () => {
       setConnectionState("connecting");
@@ -47,12 +53,21 @@ export function useSessionSocket(sessionId: string): void {
         const response = await fetch(
           buildUserApiUrl(`/api/v1/sessions/${sessionId}`),
         );
+        if (response.status === 404) {
+          if (!cancelled) {
+            setSessionNotFound(true);
+            setConnectionState("disconnected");
+          }
+          return;
+        }
+
         if (!response.ok) {
           throw new Error(`failed to load session ${sessionId}`);
         }
 
         const payload = (await response.json()) as BackendSessionResponse;
         if (!cancelled) {
+          setSessionNotFound(false);
           setSnapshot(normalizeSnapshot(payload.session));
         }
 
@@ -121,5 +136,11 @@ export function useSessionSocket(sessionId: string): void {
         socket.close();
       }
     };
-  }, [sessionId, setConnectionState, setSnapshot]);
+  }, [
+    resetSession,
+    sessionId,
+    setConnectionState,
+    setSessionNotFound,
+    setSnapshot,
+  ]);
 }

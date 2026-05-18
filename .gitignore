@@ -2,6 +2,10 @@
 node_modules/
 .pnpm-store/
 
+*.tsbuildinfo
+
+sessions.db
+
 # Next.js
 .next/
 out/
@@ -25,3 +29,6 @@ coverage.out
 
 # macOS
 .DS_Store
+
+.vscode/mcp.json
+stitch-exports/
