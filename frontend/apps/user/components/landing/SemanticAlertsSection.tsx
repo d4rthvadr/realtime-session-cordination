@@ -35,16 +35,16 @@ export function SemanticAlertsSection() {
   ];
 
   return (
-    <section className="border-y border-outline-variant bg-surface-container-low">
-      <div className="mx-auto max-w-container-max px-4 py-8 md:px-10 md:py-12">
-        <p className="font-label-md mb-6 text-center text-xs uppercase tracking-widest text-on-surface-variant md:mb-8 md:text-label-md">
+    <section className="border-y border-border-light bg-surface-secondary">
+      <div className="mx-auto max-w-container-max px-4 py-12 md:px-10 md:py-16">
+        <p className="font-semibold mb-8 text-center text-xs uppercase tracking-widest text-text-tertiary md:mb-10 md:text-sm">
           Universal Semantic Alerts
         </p>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 lg:grid-cols-4">
           {alerts.map((alert, index) => (
             <div
               key={index}
-              className="flex items-center gap-4 rounded-xl border border-outline-variant bg-white p-4"
+              className="flex items-center gap-4 rounded-2xl border border-border bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
             >
               <div
                 className={`flex h-12 w-12 items-center justify-center rounded-full ${alert.bgColor} ${alert.textColor}`}
@@ -57,7 +57,7 @@ export function SemanticAlertsSection() {
                 >
                   {alert.label}
                 </p>
-                <p className="text-xs text-on-surface-variant">
+                <p className="text-xs text-text-tertiary">
                   {alert.description}
                 </p>
               </div>

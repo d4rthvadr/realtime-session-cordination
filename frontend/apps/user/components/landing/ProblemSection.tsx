@@ -27,26 +27,30 @@ export function ProblemSection() {
   ];
 
   return (
-    <section className="mx-auto max-w-container-max px-4 py-12 md:px-10 md:py-24">
-      <div className="mb-8 text-center md:mb-16">
-        <h2 className="font-headline text-2xl text-primary md:text-headline-lg">
+    <section className="mx-auto max-w-container-max px-4 py-16 md:px-10 md:py-28">
+      <div className="mb-12 text-center md:mb-20">
+        <h2 className="font-headline text-3xl font-bold text-primary-dark md:text-5xl">
           Coordination shouldn't be chaotic.
         </h2>
-        <p className="mt-3 text-sm text-on-surface-variant md:mt-4 md:text-base">
+        <p className="mt-4 text-base text-text-secondary md:mt-6 md:text-lg">
           Stop relying on hand signals and frantic texts.
         </p>
       </div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-8 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 md:gap-8 lg:grid-cols-4">
         {problems.map((problem, index) => (
           <div
             key={index}
-            className="space-y-4 rounded-2xl border border-outline-variant bg-white p-8"
+            className="group space-y-4 rounded-2xl border border-border bg-white p-8 shadow-sm transition-all hover:shadow-lg hover:border-primary/20"
           >
-            <span className="material-symbols-outlined text-secondary">
-              {problem.icon}
-            </span>
-            <h3 className="font-headline text-label-md">{problem.title}</h3>
-            <p className="text-sm text-on-surface-variant">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary/10 to-accent-purple/10 transition-transform group-hover:scale-110">
+              <span className="material-symbols-outlined text-primary">
+                {problem.icon}
+              </span>
+            </div>
+            <h3 className="font-semibold text-base text-primary-dark">
+              {problem.title}
+            </h3>
+            <p className="text-sm leading-relaxed text-text-secondary">
               {problem.description}
             </p>
           </div>

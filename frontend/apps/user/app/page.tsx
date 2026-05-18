@@ -10,7 +10,7 @@ export default function HomePage() {
   return (
     <>
       <Navigation />
-      <main className="min-h-screen bg-surface pt-16 text-on-surface">
+      <main className="min-h-screen bg-white pt-16 text-text-primary">
         <HeroSection />
         <SemanticAlertsSection />
         <ProblemSection />

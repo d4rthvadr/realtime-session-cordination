@@ -31,3 +31,4 @@ coverage.out
 .DS_Store
 
 .vscode/mcp.json
+stitch-exports/

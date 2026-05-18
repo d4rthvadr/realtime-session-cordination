@@ -17,8 +17,10 @@ body {
     system-ui,
     -apple-system,
     sans-serif;
-  background-color: #f7f9fb;
-  color: #191c1e;
+  background-color: #ffffff;
+  color: #0a2540;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .material-symbols-outlined {
