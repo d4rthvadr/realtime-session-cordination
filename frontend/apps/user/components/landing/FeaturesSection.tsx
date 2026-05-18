@@ -35,15 +35,15 @@ export function FeaturesSection() {
   ];
 
   return (
-    <section className="border-t border-outline-variant bg-surface-container-low py-16 sm:py-24">
-      <div className="mx-auto max-w-container-max px-10">
+    <section className="border-t border-outline-variant bg-surface-container-low py-12 md:py-16 lg:py-24">
+      <div className="mx-auto max-w-container-max px-4 md:px-10">
         <div className="text-center">
-          <h2 className="font-headline text-headline-lg text-primary">
+          <h2 className="font-headline text-2xl text-primary md:text-headline-lg">
             Everything You Need to Stay On Schedule
           </h2>
         </div>
 
-        <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-8 grid gap-4 md:mt-12 md:gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((feature, index) => (
             <div
               key={index}

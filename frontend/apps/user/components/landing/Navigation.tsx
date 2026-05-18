@@ -1,34 +1,16 @@
 export default function Navigation() {
   return (
-    <header className="fixed left-0 top-0 z-50 flex h-16 w-full items-center justify-between border-b border-outline-variant bg-surface/80 px-10 backdrop-blur-md">
+    <header className="fixed left-0 top-0 z-50 flex h-16 w-full items-center justify-between border-b border-outline-variant bg-surface/80 px-4 backdrop-blur-md md:px-10">
       <div className="flex items-center gap-2">
-        <span className="material-symbols-outlined text-headline-md text-primary">
+        <span className="material-symbols-outlined text-xl text-primary md:text-headline-md">
           sync
         </span>
-        <span className="font-headline font-bold text-headline-md text-primary">
+        <span className="font-headline text-lg font-bold text-primary md:text-headline-md">
           SyncTime
         </span>
       </div>
-      <nav className="hidden items-center gap-8 md:flex">
-        {/* <a
-          className="font-label-md text-label-md text-primary transition-transform hover:opacity-80 active:scale-95"
-          href="#"
-        >
-          Live
-        </a>
-        <a
-          className="font-label-md text-label-md text-on-surface-variant transition-transform hover:opacity-80 active:scale-95"
-          href="#"
-        >
-          Agenda
-        </a>
-        <a
-          className="font-label-md text-label-md text-on-surface-variant transition-transform hover:opacity-80 active:scale-95"
-          href="#"
-        >
-          People
-        </a> */}
-        <button className="rounded-full bg-primary px-6 py-2 font-label-md text-label-md text-on-primary transition-transform hover:opacity-80 active:scale-95">
+      <nav className="flex items-center gap-4 md:gap-8">
+        <button className="rounded-full bg-primary px-4 py-2 font-label-md text-xs text-on-primary transition-transform hover:opacity-80 active:scale-95 md:px-6 md:text-label-md">
           Create Free
         </button>
       </nav>

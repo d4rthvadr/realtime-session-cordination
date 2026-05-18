@@ -36,11 +36,11 @@ export function SemanticAlertsSection() {
 
   return (
     <section className="border-y border-outline-variant bg-surface-container-low">
-      <div className="mx-auto max-w-container-max px-10 py-12">
-        <p className="font-label-md mb-8 text-center text-label-md uppercase tracking-widest text-on-surface-variant">
+      <div className="mx-auto max-w-container-max px-4 py-8 md:px-10 md:py-12">
+        <p className="font-label-md mb-6 text-center text-xs uppercase tracking-widest text-on-surface-variant md:mb-8 md:text-label-md">
           Universal Semantic Alerts
         </p>
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 lg:grid-cols-4">
           {alerts.map((alert, index) => (
             <div
               key={index}

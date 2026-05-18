@@ -27,16 +27,16 @@ export function ProblemSection() {
   ];
 
   return (
-    <section className="mx-auto max-w-container-max px-10 py-24">
-      <div className="mb-16 text-center">
-        <h2 className="font-headline text-headline-lg text-primary">
+    <section className="mx-auto max-w-container-max px-4 py-12 md:px-10 md:py-24">
+      <div className="mb-8 text-center md:mb-16">
+        <h2 className="font-headline text-2xl text-primary md:text-headline-lg">
           Coordination shouldn't be chaotic.
         </h2>
-        <p className="mt-4 text-on-surface-variant">
+        <p className="mt-3 text-sm text-on-surface-variant md:mt-4 md:text-base">
           Stop relying on hand signals and frantic texts.
         </p>
       </div>
-      <div className="grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-8 lg:grid-cols-4">
         {problems.map((problem, index) => (
           <div
             key={index}
