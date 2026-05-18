@@ -41,7 +41,13 @@ docker-compose up --build
 .
 ├── frontend/              # Monorepo root (npm workspaces)
 │   ├── apps/
-│   │   ├── user/         # Public countdown viewer app (port 3001)
+│   │   ├── user/         # Public countdown viewer app + landing page (port 3001)
+│   │   │   ├── app/      # Next.js 14 app directory
+│   │   │   ├── components/
+│   │   │   │   └── landing/  # Landing page sections (Navigation, Hero, Features, etc.)
+│   │   │   ├── hooks/    # WebSocket and state hooks
+│   │   │   ├── lib/      # Backend API client and utilities
+│   │   │   └── store/    # Zustand stores
 │   │   └── admin/        # Host control panel app (port 3002)
 │   └── package.json
 ├── backend/               # Standalone Go service (Gin + WebSocket)
@@ -74,9 +80,11 @@ docker-compose up --build
 **Frontend:**
 
 - Next.js 14 (React 18, TypeScript)
-- Tailwind CSS for styling
+- Tailwind CSS with custom Stripe-inspired design system
 - Zustand for state management
 - WebSocket for real-time updates
+- Geist & Inter fonts for modern typography
+- Material Symbols for consistent iconography
 
 **Backend:**
 
@@ -84,15 +92,70 @@ docker-compose up --build
 - Gorilla WebSocket for real-time connectivity
 - In-memory session manager with authoritative timing
 
+## Design System
+
+The application features a **Stripe-inspired design language** with:
+
+- **Color Palette:**
+  - Primary Purple: `#635bff` (signature brand color)
+  - Accent Cyan: `#00d4ff`
+  - Deep Navy: `#0a2540` (text primary)
+  - Clean whites and soft grays for backgrounds
+- **Visual Style:**
+  - Gradient backgrounds with blur effects
+  - Soft shadows with hover interactions
+  - Glassmorphic navigation with backdrop blur
+  - Smooth transitions and scale animations
+- **Typography:**
+  - Display/Headlines: Geist (400, 600, 700, 800)
+  - Body Text: Inter (400, 500, 600)
+  - Enhanced font smoothing for crisp rendering
+
+- **Components:**
+  - Responsive navigation with fixed header
+  - Hero section with gradient backgrounds
+  - Feature cards with hover effects
+  - Semantic alert indicators (Safe, Warning, Critical, Overtime)
+  - Gradient CTA sections with decorative elements
+
+## Landing Page Sections
+
+The user app (`/apps/user`) features a comprehensive landing page with:
+
+1. **Navigation** — Fixed header with logo and CTA button
+2. **Hero Section** — Product headline with mockup screenshot and gradient background
+3. **Semantic Alerts** — Visual showcase of timer states (Safe, Warning, Critical, Overtime)
+4. **Problem Section** — Common coordination challenges addressed by the platform
+5. **Features Grid** — 6-card layout showcasing platform capabilities
+6. **CTA Section** — Full-width gradient call-to-action with decorative blur effects
+7. **Footer** — Minimal branding and copyright
+
+All sections are mobile-responsive with Tailwind breakpoints and feature smooth hover interactions.
+
 ## Features (MVP)
 
-- ✅ Session creation with title, speaker name, and duration
-- ✅ Host controls: start, pause, resume, end, adjust time
-- ✅ Real-time countdown across all connected viewers
-- ✅ Visual urgency indicators (green/yellow/red/overtime)
-- ✅ Unique share links for public viewers
-- ✅ Session persistence and state machine validation
-- ✅ Control token authorization for host operations
+- ✅ **Marketing & Landing Page**
+  - Stripe-inspired design with gradient backgrounds
+  - Responsive navigation with fixed header
+  - Hero section with product mockup (screen.png)
+  - Semantic alerts showcase (Safe, Warning, Critical, Overtime)
+  - Problem statement and solution sections
+  - Features grid with icon badges
+  - Gradient CTA section
+  - Mobile-first responsive design
+
+- ✅ **Session Management**
+  - Session creation with title, speaker name, and duration
+  - Host controls: start, pause, resume, end, adjust time
+  - Unique share links for public viewers
+  - Session persistence and state machine validation
+  - Control token authorization for host operations
+
+- ✅ **Real-time Experience**
+  - Real-time countdown across all connected viewers
+  - Visual urgency indicators (green/yellow/red/overtime)
+  - WebSocket-powered synchronization
+  - Instant updates to all participants
 
 ## Documentation
 
