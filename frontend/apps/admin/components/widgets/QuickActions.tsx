@@ -28,19 +28,19 @@ export default function QuickActions({ actions }: QuickActionsProps) {
   };
 
   return (
-    <Card className="col-span-4">
-      <CardHeader>
-        <CardTitle className="text-lg">Quick Actions</CardTitle>
+    <Card className="col-span-12 md:col-span-8 lg:col-span-4">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base sm:text-lg">Quick Actions</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-2 sm:gap-3">
           {actions.map((action, index) => (
             <Button
               key={index}
               onClick={action.onClick}
               disabled={action.disabled}
               variant={getButtonVariant(action.variant)}
-              className="flex flex-col h-auto py-4 gap-2 rounded-full"
+              className="flex flex-col h-auto py-3 sm:py-4 gap-1 sm:gap-2 rounded-full min-h-[80px] sm:min-h-[90px]"
             >
               {action.icon}
               <span className="text-xs font-semibold">{action.label}</span>

@@ -47,18 +47,23 @@ export default function StatusCard({
   const styles = variantStyles[variant];
 
   return (
-    <Card className={cn("col-span-3", styles.bg)}>
-      <CardContent className="p-6">
+    <Card className={cn("col-span-6 md:col-span-3", styles.bg)}>
+      <CardContent className="p-4 sm:p-6">
         <div className={cn("flex items-center gap-2 mb-4", styles.text)}>
           {icon}
           <span className="text-xs font-semibold uppercase tracking-wider">
             {label}
           </span>
         </div>
-        <div className={cn("text-2xl font-semibold mb-1", styles.valueText)}>
+        <div
+          className={cn(
+            "text-xl sm:text-2xl font-semibold mb-1",
+            styles.valueText,
+          )}
+        >
           {value}
         </div>
-        <div className={cn("text-sm", styles.text)}>{subtitle}</div>
+        <div className={cn("text-xs sm:text-sm", styles.text)}>{subtitle}</div>
       </CardContent>
     </Card>
   );

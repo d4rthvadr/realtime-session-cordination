@@ -205,29 +205,36 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b bg-card/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="container mx-auto px-6 py-4">
+        <div className="container mx-auto px-4 sm:px-6 py-3 sm:py-4">
           <div className="flex justify-between items-center">
             <div>
               <div className="flex items-center gap-3">
-                <Link href="/sessions">
+                <Link href="/dashboard">
                   <Button variant="ghost" size="icon" className="rounded-full">
                     <ArrowLeft className="w-5 h-5" />
                   </Button>
                 </Link>
                 <div>
-                  <h1 className="text-2xl font-semibold tracking-tight">
+                  <h1 className="text-lg sm:text-xl md:text-2xl font-semibold tracking-tight">
                     {session.title}
                   </h1>
-                  <p className="text-sm text-muted-foreground">
-                    {session.speakerName} • Session Control Dashboard
+                  <p className="text-xs sm:text-sm text-muted-foreground">
+                    {session.speakerName}{" "}
+                    <span className="hidden sm:inline">
+                      • Session Control Dashboard
+                    </span>
                   </p>
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
               <div className="text-right">
-                <p className="text-sm text-muted-foreground">Status</p>
-                <p className="text-lg font-semibold">{session.status}</p>
+                <p className="text-xs sm:text-sm text-muted-foreground">
+                  Status
+                </p>
+                <p className="text-sm sm:text-lg font-semibold">
+                  {session.status}
+                </p>
               </div>
             </div>
           </div>
@@ -235,8 +242,8 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
       </header>
 
       {/* Main Content - Bento Grid */}
-      <main className="container mx-auto px-6 py-8">
-        <div className="grid grid-cols-12 gap-4">
+      <main className="container mx-auto px-4 sm:px-6 py-4 sm:py-8">
+        <div className="grid grid-cols-12 gap-3 sm:gap-4">
           {/* Top Row: Timer + Attendee Stats */}
           <TimerWidget
             currentTime={currentTime}
@@ -256,13 +263,15 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
           />
 
           {/* Session Controls */}
-          <Card className="col-span-6">
-            <CardHeader>
-              <CardTitle className="text-lg">Session Controls</CardTitle>
+          <Card className="col-span-12 md:col-span-6">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base sm:text-lg">
+                Session Controls
+              </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-3 sm:space-y-4">
               {actionError && (
-                <div className="text-sm text-destructive bg-destructive/10 p-2 rounded">
+                <div className="text-xs sm:text-sm text-destructive bg-destructive/10 p-2 sm:p-3 rounded">
                   {actionError}
                 </div>
               )}
@@ -273,30 +282,30 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
                   onClick={() =>
                     handleAction((token) => startSession(sessionId, token))
                   }
-                  className="bg-emerald-600 hover:bg-emerald-700 rounded-full"
+                  className="bg-emerald-600 hover:bg-emerald-700 rounded-full h-10 sm:h-11"
                 >
                   <Play className="w-4 h-4 mr-2" />
-                  Start
+                  <span className="text-sm sm:text-base">Start</span>
                 </Button>
                 <Button
                   disabled={!canPause || isPending}
                   onClick={() =>
                     handleAction((token) => pauseSession(sessionId, token))
                   }
-                  className="bg-amber-500 hover:bg-amber-600 rounded-full"
+                  className="bg-amber-500 hover:bg-amber-600 rounded-full h-10 sm:h-11"
                 >
                   <PauseIcon className="w-4 h-4 mr-2" />
-                  Pause
+                  <span className="text-sm sm:text-base">Pause</span>
                 </Button>
                 <Button
                   disabled={!canResume || isPending}
                   onClick={() =>
                     handleAction((token) => resumeSession(sessionId, token))
                   }
-                  className="bg-sky-600 hover:bg-sky-700 rounded-full"
+                  className="bg-sky-600 hover:bg-sky-700 rounded-full h-10 sm:h-11"
                 >
                   <RotateCcw className="w-4 h-4 mr-2" />
-                  Resume
+                  <span className="text-sm sm:text-base">Resume</span>
                 </Button>
                 <Button
                   disabled={!canEnd || isPending}
@@ -304,10 +313,10 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
                     handleAction((token) => endSession(sessionId, token))
                   }
                   variant="destructive"
-                  className="rounded-full"
+                  className="rounded-full h-10 sm:h-11"
                 >
                   <Square className="w-4 h-4 mr-2" />
-                  End
+                  <span className="text-sm sm:text-base">End</span>
                 </Button>
               </div>
 
@@ -363,10 +372,10 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
                   href={viewerLink}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-xs text-primary hover:underline flex items-center gap-1 break-all"
+                  className="text-xs text-primary hover:underline flex items-center gap-1 break-all leading-relaxed"
                 >
-                  {viewerLink}
-                  <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                  <span className="break-all">{viewerLink}</span>
+                  <ExternalLink className="w-3 h-3 flex-shrink-0 inline-block" />
                 </a>
               </div>
             </CardContent>

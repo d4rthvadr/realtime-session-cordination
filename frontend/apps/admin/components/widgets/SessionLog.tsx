@@ -31,9 +31,9 @@ export default function SessionLog({ entries, onExport }: SessionLogProps) {
 
   return (
     <Card className="col-span-12">
-      <CardHeader>
-        <div className="flex justify-between items-center">
-          <h3 className="text-lg font-semibold">Session Log</h3>
+      <CardHeader className="pb-3 sm:pb-6">
+        <div className="flex justify-between items-center gap-2">
+          <h3 className="text-base sm:text-lg font-semibold">Session Log</h3>
           {onExport && (
             <Button
               onClick={onExport}
@@ -46,8 +46,8 @@ export default function SessionLog({ entries, onExport }: SessionLogProps) {
           )}
         </div>
       </CardHeader>
-      <CardContent>
-        <div className="space-y-0 max-h-[200px] overflow-y-auto pr-4 scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
+      <CardContent className="px-4 sm:px-6">
+        <div className="space-y-0 max-h-[200px] sm:max-h-[250px] overflow-y-auto pr-2 sm:pr-4 scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
           {entries.length === 0 ? (
             <div className="text-center py-8 text-slate-400 text-sm">
               No log entries yet
@@ -56,12 +56,12 @@ export default function SessionLog({ entries, onExport }: SessionLogProps) {
             entries.map((entry, index) => (
               <div
                 key={index}
-                className="flex items-center py-3 border-b border-slate-100 last:border-0"
+                className="flex items-center py-2 sm:py-3 border-b border-slate-100 last:border-0 gap-2 sm:gap-0"
               >
-                <span className="w-20 text-xs font-semibold text-slate-500 flex-shrink-0">
+                <span className="w-16 sm:w-20 text-xs font-semibold text-slate-500 flex-shrink-0">
                   {entry.timestamp}
                 </span>
-                <span className="flex-1 text-sm text-slate-900 px-4">
+                <span className="flex-1 text-xs sm:text-sm text-slate-900 px-2 sm:px-4">
                   {entry.message}
                 </span>
                 {getIconForType(entry.type)}

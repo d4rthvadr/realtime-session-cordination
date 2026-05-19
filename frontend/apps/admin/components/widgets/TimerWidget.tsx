@@ -50,7 +50,7 @@ export default function TimerWidget({
   };
 
   return (
-    <Card className="col-span-8 p-6 flex flex-col justify-between">
+    <Card className="col-span-12 md:col-span-8 p-4 md:p-6 flex flex-col justify-between">
       <div className="flex justify-between items-start">
         <Badge variant={getStatusVariant()} className="tracking-wider">
           {getStatusLabel()}
@@ -81,11 +81,11 @@ export default function TimerWidget({
         </div>
       </div>
 
-      <div className="flex items-baseline justify-center py-10">
-        <span className="text-8xl md:text-9xl font-bold leading-none tracking-tighter">
+      <div className="flex items-baseline justify-center py-6 md:py-10">
+        <span className="text-5xl sm:text-7xl md:text-8xl lg:text-9xl font-bold leading-none tracking-tighter">
           {currentTime}
         </span>
-        <span className="text-2xl md:text-3xl font-semibold text-muted-foreground ml-4">
+        <span className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-semibold text-muted-foreground ml-2 md:ml-4">
           / {totalTime}
         </span>
       </div>

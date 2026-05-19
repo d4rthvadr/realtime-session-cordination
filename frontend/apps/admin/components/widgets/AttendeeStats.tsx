@@ -15,17 +15,19 @@ export default function AttendeeStats({
   attentionLevel,
 }: AttendeeStatsProps) {
   return (
-    <Card className="col-span-4 bg-slate-900 border-slate-700 text-white">
+    <Card className="col-span-12 md:col-span-4 bg-slate-900 border-slate-700 text-white">
       <CardHeader className="pb-3">
-        <div className="flex justify-between items-center">
-          <h3 className="text-lg font-semibold text-white">Attendees</h3>
+        <div className="flex justify-between items-center gap-2">
+          <h3 className="text-base sm:text-lg font-semibold text-white">
+            Attendees
+          </h3>
           <Badge variant="secondary" className="text-xs tracking-wider">
             {totalOnline} ONLINE
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="pb-6">
-        <div className="flex -space-x-3 mb-6">
+      <CardContent className="pb-4 sm:pb-6">
+        <div className="flex -space-x-3 mb-4 sm:mb-6">
           <div className="w-12 h-12 rounded-full border-2 border-slate-900 overflow-hidden bg-slate-400">
             <div className="w-full h-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-semibold">
               A

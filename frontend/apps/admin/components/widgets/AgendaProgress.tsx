@@ -21,8 +21,8 @@ export default function AgendaProgress({
   progress,
 }: AgendaProgressProps) {
   return (
-    <Card className="col-span-6 bg-purple-50">
-      <CardContent className="p-6">
+    <Card className="col-span-12 md:col-span-6 bg-purple-50">
+      <CardContent className="p-4 sm:p-6">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2 text-purple-700">
             <ClipboardList className="w-5 h-5" />
@@ -37,15 +37,17 @@ export default function AgendaProgress({
             ITEM {currentItem} OF {totalItems}
           </Badge>
         </div>
-        <div className="text-lg font-semibold text-purple-900 mb-2">
+        <div className="text-base sm:text-lg font-semibold text-purple-900 mb-2">
           {currentTitle}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
           <Progress
             value={Math.min(100, Math.max(0, progress))}
-            className="flex-1 h-1.5 bg-purple-200"
+            className="flex-1 h-1.5 bg-purple-200 w-full"
           />
-          <span className="text-sm text-purple-700">{timeRemaining} left</span>
+          <span className="text-xs sm:text-sm text-purple-700 whitespace-nowrap">
+            {timeRemaining} left
+          </span>
         </div>
       </CardContent>
     </Card>
