@@ -13,6 +13,7 @@ export default function SessionNotFoundState({
         <EmptyState
           title="Session Not Found"
           description={`We could not find a live session for this link. Verify the session ID (${sessionId}) and try again.`}
+          isDark
         />
       </div>
     </section>

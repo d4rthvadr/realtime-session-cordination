@@ -15,17 +15,17 @@ interface CountdownBoardProps {
 }
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
-  LIVE: "bg-emerald-100 text-emerald-700 border-emerald-200",
-  PAUSED: "bg-amber-100 text-amber-700 border-amber-200",
-  ENDED: "bg-slate-100 text-slate-600 border-slate-200",
-  CREATED: "bg-blue-100 text-blue-700 border-blue-200",
+  LIVE: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
+  PAUSED: "border-amber-500/40 bg-amber-500/15 text-amber-300",
+  ENDED: "border-slate-500/40 bg-slate-500/15 text-slate-300",
+  CREATED: "border-blue-500/40 bg-blue-500/15 text-blue-300",
 };
 
 const TIMER_CLASS_BY_LEVEL = {
-  safe: "text-emerald-700",
-  warning: "text-amber-600",
-  critical: "text-red-600",
-  overtime: "text-red-700",
+  safe: "text-emerald-400",
+  warning: "text-amber-400",
+  critical: "text-red-400",
+  overtime: "text-red-500",
 } as const;
 
 export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
@@ -111,7 +111,7 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
   return (
     <section className="mx-auto flex min-h-screen max-w-5xl flex-col justify-center px-4 py-8 sm:px-6 lg:px-8">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <Badge className="bg-slate-100 text-slate-700 border-slate-200">
+        <Badge className="border-slate-700 bg-slate-800/80 text-slate-300">
           SESSION VIEWER
         </Badge>
         <div className="flex items-center gap-2">
@@ -122,26 +122,31 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
           </Badge>
           <Badge
             variant={connectionState === "connected" ? "success" : "warning"}
+            className={
+              connectionState === "connected"
+                ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                : "border-amber-500/40 bg-amber-500/15 text-amber-300"
+            }
           >
             {connectionState}
           </Badge>
         </div>
       </div>
 
-      <Card className="border-slate-200">
+      <Card className="border-slate-800 bg-slate-900/70 shadow-[0_0_0_1px_rgba(255,255,255,0.02),0_20px_60px_rgba(0,0,0,0.4)] backdrop-blur">
         <CardContent className="p-6 sm:p-10">
           <div className="text-center">
-            <h1 className="text-2xl font-semibold text-slate-900 sm:text-4xl">
+            <h1 className="text-2xl font-semibold text-slate-100 sm:text-4xl">
               {title}
             </h1>
-            <p className="mt-2 text-sm text-slate-500 sm:text-base">
+            <p className="mt-2 text-sm text-slate-400 sm:text-base">
               Speaker:{" "}
-              <span className="font-medium text-slate-700">{speakerName}</span>
+              <span className="font-medium text-slate-200">{speakerName}</span>
             </p>
           </div>
 
           <div className="mt-10 text-center">
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
               Remaining Time
             </p>
             <p
@@ -149,26 +154,29 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
             >
               {remainingSeconds < 0 ? "-" : ""}
               {formatDuration(remainingSeconds)}
-              <span className="ml-2 text-3xl font-semibold text-slate-500 sm:text-5xl">
+              <span className="ml-2 text-3xl font-semibold text-slate-400 sm:text-5xl">
                 / {formatDuration(durationSeconds)}
               </span>
             </p>
           </div>
 
           <div className="mt-8">
-            <Progress value={progressValue} className="h-2 bg-slate-100" />
+            <Progress
+              value={progressValue}
+              className="h-2 bg-slate-800 [&_[data-state]]:bg-indigo-500"
+            />
           </div>
 
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
             <Badge
               variant="outline"
-              className="border-slate-200 text-slate-600"
+              className="border-slate-700 text-slate-400"
             >
               Urgency: {timerState.label}
             </Badge>
             <Badge
               variant="outline"
-              className="border-slate-200 text-slate-600"
+              className="border-slate-700 text-slate-400"
             >
               Session: {sessionId}
             </Badge>
