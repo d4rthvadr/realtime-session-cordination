@@ -1,5 +1,4 @@
 package config
-package config
 
 import (
 	"fmt"
@@ -17,6 +16,8 @@ type Config struct {
 	JWTExpiry       time.Duration
 	JWTIssuer       string
 	CORSAllowOrigin string
+	LogLevel        string
+	LogFormat       string
 }
 
 func LoadConfig() (Config, error) {
@@ -26,6 +27,8 @@ func LoadConfig() (Config, error) {
 		SqliteDBPath:    getOrDefault("SQLITE_DB_PATH", "./sessions.db"),
 		JWTIssuer:       getOrDefault("JWT_ISSUER", "realtime-session-coordination"),
 		CORSAllowOrigin: os.Getenv("CORS_ALLOW_ORIGIN"),
+		LogLevel:        getOrDefault("LOG_LEVEL", "info"),
+		LogFormat:       getOrDefault("LOG_FORMAT", "json"),
 	}
 
 	secret, err := requiredEnv("JWT_SECRET")

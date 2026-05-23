@@ -2,13 +2,14 @@ package api
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"realtime-session-coordination/backend/internal/auth"
+	"realtime-session-coordination/backend/internal/logging"
 	"realtime-session-coordination/backend/internal/session"
 	"realtime-session-coordination/backend/internal/user"
 	"realtime-session-coordination/backend/internal/ws"
@@ -21,14 +22,21 @@ type Handler struct {
 	manager     *session.Manager
 	hub         *ws.Hub
 	authService *auth.Service
+	logger      *slog.Logger
 	upgrader    websocket.Upgrader
 }
 
-func NewHandler(manager *session.Manager, hub *ws.Hub, authService *auth.Service) *Handler {
+func NewHandler(manager *session.Manager, hub *ws.Hub, authService *auth.Service, logger *slog.Logger) *Handler {
+	if logger == nil {
+		logger = logging.Default()
+	}
+	logger = logger.With("component", "api_handler")
+
 	return &Handler{
 		manager:     manager,
 		hub:         hub,
 		authService: authService,
+		logger:      logger,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -211,7 +219,7 @@ func (h *Handler) sessionSocket(c *gin.Context) {
 
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("ws upgrade failed: %v", err)
+		h.logger.Error("ws_upgrade_failed", "error", err, "session_id", sessionID)
 		return
 	}
 
