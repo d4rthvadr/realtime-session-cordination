@@ -6,13 +6,23 @@ export default function AuthLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen flex flex-col lg:flex-row">
       {/* Left Side - Auth Form */}
       <div className="flex-1 flex items-center justify-center p-8 bg-white">
-        <div className="w-full max-w-md">{children}</div>
+        <div className="w-full max-w-md">
+          {/* Mobile Logo - Shows only on mobile, aligned with form */}
+          <div className="flex items-center gap-2 mb-8 lg:hidden">
+            <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center">
+              <BarChart3 className="w-6 h-6 text-white" />
+            </div>
+            <span className="text-xl font-bold text-slate-900">SyncTime</span>
+          </div>
+
+          {children}
+        </div>
       </div>
 
-      {/* Right Side - Marketing Content */}
+      {/* Marketing Content - Shows on right on desktop only */}
       <div className="hidden lg:flex flex-1 bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 p-12 items-center justify-center relative overflow-hidden">
         {/* Background Pattern */}
         <div className="absolute inset-0 bg-grid-white/[0.05] bg-[size:20px_20px]" />
