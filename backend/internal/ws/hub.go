@@ -52,6 +52,10 @@ func (h *Hub) Unregister(sessionID string, conn *websocket.Conn) {
 }
 
 func (h *Hub) Broadcast(sessionID string, payload any) {
+	h.BroadcastWithRequestID(sessionID, payload, "")
+}
+
+func (h *Hub) BroadcastWithRequestID(sessionID string, payload any, requestID string) {
 	h.mu.Lock()
 	clients, ok := h.clients[sessionID]
 	if !ok {
@@ -68,7 +72,11 @@ func (h *Hub) Broadcast(sessionID string, payload any) {
 	for _, conn := range conns {
 		_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if err := conn.WriteJSON(payload); err != nil {
-			h.logger.Error("ws_write_failed", "session_id", sessionID, "error", err)
+			if requestID != "" {
+				h.logger.Error("ws_write_failed", "session_id", sessionID, "request_id", requestID, "error", err)
+			} else {
+				h.logger.Error("ws_write_failed", "session_id", sessionID, "error", err)
+			}
 			h.Unregister(sessionID, conn)
 		}
 	}

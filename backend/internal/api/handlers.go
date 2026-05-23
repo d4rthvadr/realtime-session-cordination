@@ -137,7 +137,7 @@ func (h *Handler) startSession(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, event)
-	h.hub.Broadcast(id, event)
+	h.hub.BroadcastWithRequestID(id, event, RequestIDFromContext(c))
 }
 
 func (h *Handler) pauseSession(c *gin.Context) {
@@ -152,7 +152,7 @@ func (h *Handler) pauseSession(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, event)
-	h.hub.Broadcast(id, event)
+	h.hub.BroadcastWithRequestID(id, event, RequestIDFromContext(c))
 }
 
 func (h *Handler) resumeSession(c *gin.Context) {
@@ -167,7 +167,7 @@ func (h *Handler) resumeSession(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, event)
-	h.hub.Broadcast(id, event)
+	h.hub.BroadcastWithRequestID(id, event, RequestIDFromContext(c))
 }
 
 func (h *Handler) endSession(c *gin.Context) {
@@ -182,7 +182,7 @@ func (h *Handler) endSession(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, event)
-	h.hub.Broadcast(id, event)
+	h.hub.BroadcastWithRequestID(id, event, RequestIDFromContext(c))
 }
 
 type adjustTimeBody struct {
@@ -207,7 +207,7 @@ func (h *Handler) adjustTime(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, event)
-	h.hub.Broadcast(id, event)
+	h.hub.BroadcastWithRequestID(id, event, RequestIDFromContext(c))
 }
 
 func (h *Handler) sessionSocket(c *gin.Context) {
@@ -219,7 +219,7 @@ func (h *Handler) sessionSocket(c *gin.Context) {
 
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		h.logger.Error("ws_upgrade_failed", "error", err, "session_id", sessionID)
+		h.logger.Error("ws_upgrade_failed", "error", err, "session_id", sessionID, "request_id", RequestIDFromContext(c))
 		return
 	}
 
@@ -305,7 +305,8 @@ func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", allowed)
 		c.Header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, X-Control-Token, Authorization")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, X-Control-Token, Authorization, X-Request-ID")
+		c.Header("Access-Control-Expose-Headers", "X-Request-ID")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
