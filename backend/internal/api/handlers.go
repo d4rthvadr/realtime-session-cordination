@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"realtime-session-coordination/backend/internal/auth"
 	"realtime-session-coordination/backend/internal/session"
+	"realtime-session-coordination/backend/internal/user"
 	"realtime-session-coordination/backend/internal/ws"
 
 	"github.com/gin-gonic/gin"
@@ -16,15 +18,17 @@ import (
 )
 
 type Handler struct {
-	manager  *session.Manager
-	hub      *ws.Hub
-	upgrader websocket.Upgrader
+	manager     *session.Manager
+	hub         *ws.Hub
+	authService *auth.Service
+	upgrader    websocket.Upgrader
 }
 
-func NewHandler(manager *session.Manager, hub *ws.Hub) *Handler {
+func NewHandler(manager *session.Manager, hub *ws.Hub, authService *auth.Service) *Handler {
 	return &Handler{
-		manager: manager,
-		hub:     hub,
+		manager:     manager,
+		hub:         hub,
+		authService: authService,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -38,17 +42,40 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 
 	apiV1 := router.Group("/api/v1")
 	{
-		apiV1.POST("/sessions", h.createSession)
-		apiV1.GET("/sessions", h.listSessions)
+		apiV1.POST("/auth/guest", h.createGuest)
+
+		protected := apiV1.Group("")
+		protected.Use(h.requireAuth())
+		protected.POST("/sessions", h.createSession)
+		protected.GET("/sessions", h.listSessions)
+		protected.POST("/sessions/:id/start", h.startSession)
+		protected.POST("/sessions/:id/pause", h.pauseSession)
+		protected.POST("/sessions/:id/resume", h.resumeSession)
+		protected.POST("/sessions/:id/end", h.endSession)
+		protected.POST("/sessions/:id/adjust-time", h.adjustTime)
+
 		apiV1.GET("/sessions/:id", h.getSession)
-		apiV1.POST("/sessions/:id/start", h.startSession)
-		apiV1.POST("/sessions/:id/pause", h.pauseSession)
-		apiV1.POST("/sessions/:id/resume", h.resumeSession)
-		apiV1.POST("/sessions/:id/end", h.endSession)
-		apiV1.POST("/sessions/:id/adjust-time", h.adjustTime)
 	}
 
 	router.GET("/ws/sessions/:id", h.sessionSocket)
+}
+
+func (h *Handler) createGuest(c *gin.Context) {
+	if h.authService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "auth service not configured"})
+		return
+	}
+
+	u, token, err := h.authService.CreateGuest()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create guest user"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"token": token,
+		"user":  user.ToSnapshot(u),
+	})
 }
 
 func (h *Handler) createSession(c *gin.Context) {
@@ -219,6 +246,35 @@ func (h *Handler) authorizeControl(c *gin.Context, sessionID string) bool {
 	return false
 }
 
+func (h *Handler) requireAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if h.authService == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "auth service not configured"})
+			c.Abort()
+			return
+		}
+
+		authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
+		if !strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": auth.ErrUnauthorized.Error()})
+			c.Abort()
+			return
+		}
+
+		rawToken := strings.TrimSpace(authHeader[7:])
+		claims, err := h.authService.ValidateToken(rawToken)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": auth.ErrUnauthorized.Error()})
+			c.Abort()
+			return
+		}
+
+		c.Set("authUserID", claims.Subject)
+		c.Set("authUserType", claims.UserType)
+		c.Next()
+	}
+}
+
 func (h *Handler) writeDomainErr(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, session.ErrNotFound):
@@ -241,7 +297,7 @@ func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", allowed)
 		c.Header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, X-Control-Token")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, X-Control-Token, Authorization")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
