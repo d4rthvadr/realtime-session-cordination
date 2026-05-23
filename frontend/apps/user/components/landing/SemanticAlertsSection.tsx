@@ -1,3 +1,6 @@
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+
 export function SemanticAlertsSection() {
   const alerts = [
     {
@@ -35,33 +38,35 @@ export function SemanticAlertsSection() {
   ];
 
   return (
-    <section className="border-y border-border-light bg-surface-secondary">
+    <section className="border-y border-slate-200 bg-slate-50/70">
       <div className="mx-auto max-w-container-max px-4 py-12 md:px-10 md:py-16">
-        <p className="font-semibold mb-8 text-center text-xs uppercase tracking-widest text-text-tertiary md:mb-10 md:text-sm">
+        <p className="mb-8 text-center text-xs font-semibold uppercase tracking-widest text-slate-500 md:mb-10 md:text-sm">
           Universal Semantic Alerts
         </p>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 lg:grid-cols-4">
           {alerts.map((alert, index) => (
-            <div
-              key={index}
-              className="flex items-center gap-4 rounded-2xl border border-border bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
-            >
-              <div
-                className={`flex h-12 w-12 items-center justify-center rounded-full ${alert.bgColor} ${alert.textColor}`}
-              >
-                <span className="material-symbols-outlined">{alert.icon}</span>
-              </div>
-              <div>
-                <p
-                  className={`font-label-md text-label-md ${alert.labelColor === "text-slate-900" ? "text-slate-900" : alert.labelColor}`}
+            <Card key={index} className="rounded-2xl border-slate-200">
+              <CardContent className="flex items-center gap-4 p-5">
+                <div
+                  className={`flex h-12 w-12 items-center justify-center rounded-full ${alert.bgColor} ${alert.textColor}`}
                 >
-                  {alert.label}
-                </p>
-                <p className="text-xs text-text-tertiary">
-                  {alert.description}
-                </p>
-              </div>
-            </div>
+                  <span className="material-symbols-outlined">
+                    {alert.icon}
+                  </span>
+                </div>
+                <div>
+                  <Badge
+                    variant="outline"
+                    className={`border-transparent px-0 py-0 text-xs ${alert.labelColor === "text-slate-900" ? "text-slate-900" : alert.labelColor}`}
+                  >
+                    {alert.label}
+                  </Badge>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {alert.description}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
           ))}
         </div>
       </div>

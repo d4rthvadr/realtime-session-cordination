@@ -1,3 +1,5 @@
+import { Card, CardContent } from "@/components/ui/card";
+
 export function FeaturesSection() {
   const features = [
     {
@@ -35,36 +37,38 @@ export function FeaturesSection() {
   ];
 
   return (
-    <section className="border-t border-border-light bg-gradient-to-b from-surface-secondary to-white py-16 md:py-24 lg:py-32">
+    <section className="border-t border-slate-200 bg-gradient-to-b from-slate-50 to-white py-16 md:py-24 lg:py-32">
       <div className="mx-auto max-w-container-max px-4 md:px-10">
         <div className="text-center">
-          <h2 className="font-headline text-3xl font-bold text-primary-dark md:text-5xl">
+          <h2 className="font-headline text-3xl font-bold text-slate-900 md:text-5xl">
             Everything You Need to Stay On Schedule
           </h2>
         </div>
 
         <div className="mt-12 grid gap-6 md:mt-16 md:gap-8 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((feature, index) => (
-            <div
+            <Card
               key={index}
-              className="group rounded-2xl border border-border bg-white p-8 shadow-sm transition-all hover:shadow-xl hover:border-primary/20"
+              className="group rounded-2xl border-slate-200 transition-all hover:border-slate-300 hover:shadow-xl"
             >
-              <div className="flex items-start gap-4">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary-light shadow-md transition-transform group-hover:scale-110">
-                  <span className="material-symbols-outlined text-xl text-white">
-                    {feature.icon}
-                  </span>
+              <CardContent className="p-8">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-slate-900 shadow-md transition-transform group-hover:scale-110">
+                    <span className="material-symbols-outlined text-xl text-white">
+                      {feature.icon}
+                    </span>
+                  </div>
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900">
+                      {feature.title}
+                    </h3>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                      {feature.description}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-semibold text-base text-primary-dark">
-                    {feature.title}
-                  </h3>
-                  <p className="mt-2 text-sm leading-relaxed text-text-secondary">
-                    {feature.description}
-                  </p>
-                </div>
-              </div>
-            </div>
+              </CardContent>
+            </Card>
           ))}
         </div>
       </div>

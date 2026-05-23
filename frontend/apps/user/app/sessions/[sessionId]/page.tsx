@@ -8,7 +8,7 @@ interface SessionPageParams {
 
 export default function SessionPage({ params }: SessionPageParams) {
   return (
-    <main className="min-h-screen bg-slate">
+    <main className="min-h-screen bg-background">
       <CountdownBoard sessionId={params.sessionId} />
     </main>
   );
