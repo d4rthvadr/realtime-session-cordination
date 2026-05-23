@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useEffect, useRef } from "react";
+import { Suspense, useState, useTransition, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { verifyOTP, sendOTP } from "@/lib/auth-actions";
 import { ArrowLeft, Mail } from "lucide-react";
 
-export default function VerifyOTPPage() {
+function VerifyOTPContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const email = searchParams.get("email") || "";
@@ -89,11 +89,6 @@ export default function VerifyOTPPage() {
         setOtp(["", "", "", "", "", ""]);
         inputRefs.current[0]?.focus();
         return;
-      }
-
-      // Store auth token (in a real app, use httpOnly cookies or secure storage)
-      if (result.token) {
-        window.localStorage.setItem("authToken", result.token);
       }
 
       // Redirect to dashboard
@@ -198,5 +193,15 @@ export default function VerifyOTPPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function VerifyOTPPage() {
+  return (
+    <Suspense
+      fallback={<div className="text-sm text-slate-500">Loading...</div>}
+    >
+      <VerifyOTPContent />
+    </Suspense>
   );
 }

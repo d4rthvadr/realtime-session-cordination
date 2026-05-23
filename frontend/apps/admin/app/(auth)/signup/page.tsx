@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { sendOTP } from "@/lib/auth-actions";
+import { continueAsGuest, sendOTP } from "@/lib/auth-actions";
 import { Mail, ArrowRight } from "lucide-react";
 
 export default function SignUpPage() {
@@ -14,6 +14,7 @@ export default function SignUpPage() {
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [isGuestPending, startGuestTransition] = useTransition();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,6 +45,19 @@ export default function SignUpPage() {
     });
   };
 
+  const handleGuestMode = () => {
+    setError(null);
+    startGuestTransition(async () => {
+      const result = await continueAsGuest();
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+
+      router.push("/dashboard");
+    });
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -69,7 +83,7 @@ export default function SignUpPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="pl-10"
-              disabled={isPending}
+              disabled={isPending || isGuestPending}
             />
           </div>
         </div>
@@ -83,7 +97,7 @@ export default function SignUpPage() {
         <Button
           type="submit"
           className="w-full rounded-full h-11"
-          disabled={isPending}
+          disabled={isPending || isGuestPending}
         >
           {isPending ? (
             "Sending OTP..."
@@ -93,6 +107,16 @@ export default function SignUpPage() {
               <ArrowRight className="w-4 h-4 ml-2" />
             </>
           )}
+        </Button>
+
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full rounded-full h-11"
+          onClick={handleGuestMode}
+          disabled={isPending || isGuestPending}
+        >
+          {isGuestPending ? "Entering guest mode..." : "Continue as Guest"}
         </Button>
       </form>
 
