@@ -8,6 +8,15 @@
 
 Host operations require a **control token** obtained when creating a session.
 
+## Request ID Correlation
+
+All HTTP endpoints support request correlation via `X-Request-ID`.
+
+- Optional request header: `X-Request-ID: <id>`
+- If omitted, backend generates a request ID.
+- Response includes `X-Request-ID` for every request.
+- Backend structured logs include `request_id` to correlate API and related websocket-side errors.
+
 **Header Authorization:**
 
 ```
