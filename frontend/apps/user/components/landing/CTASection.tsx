@@ -2,11 +2,11 @@ import { Button } from "@/components/ui/button";
 
 export function CTASection() {
   return (
-    <section className="relative overflow-hidden border-t border-slate-200 bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-900 py-20 md:py-28 lg:py-32">
+    <section className="relative overflow-hidden border-t border-slate-800 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-900/70 py-20 md:py-28 lg:py-32">
       {/* Decorative Elements */}
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-0 top-0 h-72 w-72 rounded-full bg-white/10 blur-3xl"></div>
-        <div className="absolute right-0 bottom-0 h-72 w-72 rounded-full bg-emerald-300/20 blur-3xl"></div>
+        <div className="absolute left-0 top-0 h-72 w-72 rounded-full bg-indigo-300/15 blur-3xl"></div>
+        <div className="absolute right-0 bottom-0 h-72 w-72 rounded-full bg-emerald-300/15 blur-3xl"></div>
       </div>
 
       <div className="relative mx-auto max-w-4xl px-4 text-center md:px-10">
@@ -15,7 +15,7 @@ export function CTASection() {
         </h2>
 
         <div className="mt-8 md:mt-10">
-          <Button className="h-12 bg-white px-8 text-base text-slate-900 shadow-2xl hover:bg-slate-100 md:h-14 md:px-10 md:text-lg">
+          <Button className="h-12 bg-slate-100 px-8 text-base text-slate-900 shadow-2xl hover:bg-white md:h-14 md:px-10 md:text-lg">
             Create Your First Session — Free
           </Button>
         </div>
