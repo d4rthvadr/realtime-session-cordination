@@ -12,6 +12,12 @@ const (
 	// Program items are either scheduled normally or kept as a canceled timeline slot.
 	StatusScheduled = "scheduled"
 	StatusCanceled  = "canceled"
+
+	// These event types are emitted by the manager when program items change, and used by clients to trigger UI updates.
+	EventCreated   = "PROGRAM_ITEM_CREATED"
+	EventUpdated   = "PROGRAM_ITEM_UPDATED"
+	EventCanceled  = "PROGRAM_ITEM_CANCELED"
+	EventReordered = "PROGRAM_ITEMS_REORDERED"
 )
 
 var (
@@ -86,6 +92,14 @@ type UpdateInput struct {
 type ReorderItem struct {
 	ID       string `json:"id"`
 	Position int    `json:"position"`
+}
+
+// Event is the websocket payload emitted when a ProgramItem changes.
+type Event struct {
+	Type         string     `json:"type"`
+	SessionID    string     `json:"sessionId,omitempty"`
+	ProgramItem  *Snapshot  `json:"programItem,omitempty"`
+	ProgramItems []Snapshot `json:"programItems,omitempty"`
 }
 
 type Manager struct {

@@ -194,6 +194,12 @@ func (h *Handler) createProgramItem(c *gin.Context) {
 		return
 	}
 
+	h.broadcastProgramItemEvent(sessionID, programitem.Event{
+		Type:        programitem.EventCreated,
+		SessionID:   sessionID,
+		ProgramItem: &snap,
+	}, c)
+
 	c.JSON(http.StatusCreated, gin.H{"programItem": snap})
 }
 
@@ -249,6 +255,12 @@ func (h *Handler) updateProgramItem(c *gin.Context) {
 		return
 	}
 
+	h.broadcastProgramItemEvent(item.SessionID, programitem.Event{
+		Type:        programitem.EventUpdated,
+		SessionID:   item.SessionID,
+		ProgramItem: &snap,
+	}, c)
+
 	c.JSON(http.StatusOK, gin.H{"programItem": snap})
 }
 
@@ -273,6 +285,12 @@ func (h *Handler) cancelProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+
+	h.broadcastProgramItemEvent(item.SessionID, programitem.Event{
+		Type:        programitem.EventCanceled,
+		SessionID:   item.SessionID,
+		ProgramItem: &snap,
+	}, c)
 
 	c.JSON(http.StatusOK, gin.H{"programItem": snap})
 }
@@ -303,6 +321,12 @@ func (h *Handler) reorderProgramItems(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+
+	h.broadcastProgramItemEvent(sessionID, programitem.Event{
+		Type:        programitem.EventReordered,
+		SessionID:   sessionID,
+		ProgramItems: items,
+	}, c)
 
 	c.JSON(http.StatusOK, gin.H{"programItems": items})
 }
@@ -489,6 +513,16 @@ func (h *Handler) writeProgramItemErr(c *gin.Context, err error) {
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	}
+}
+
+func (h *Handler) broadcastProgramItemEvent(sessionID string, event programitem.Event, c *gin.Context) {
+	if h.hub == nil {
+		return
+	}
+	if sessionID == "" {
+		return
+	}
+	h.hub.BroadcastWithRequestID(sessionID, event, RequestIDFromContext(c))
 }
 
 func CORSMiddleware() gin.HandlerFunc {
