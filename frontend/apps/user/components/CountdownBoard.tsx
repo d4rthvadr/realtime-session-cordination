@@ -42,6 +42,9 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
     (state) => state.hasReceivedSnapshot,
   );
   const sessionNotFound = useSessionStore((state) => state.sessionNotFound);
+  const currentProgramItem = useSessionStore(
+    (state) => state.currentProgramItem,
+  );
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useSessionSocket(sessionId);
@@ -180,6 +183,48 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
             >
               Session: {sessionId}
             </Badge>
+          </div>
+
+          <div className="mt-8 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+              Current Program Item
+            </p>
+
+            {currentProgramItem ? (
+              <div className="mt-3 space-y-2">
+                <p className="text-lg font-semibold text-slate-100 sm:text-xl">
+                  {currentProgramItem.title}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className="border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
+                  >
+                    {currentProgramItem.type.toUpperCase()}
+                  </Badge>
+                  {currentProgramItem.hostName ? (
+                    <Badge
+                      variant="outline"
+                      className="border-slate-700 text-slate-300"
+                    >
+                      Host: {currentProgramItem.hostName}
+                    </Badge>
+                  ) : null}
+                  {currentProgramItem.location ? (
+                    <Badge
+                      variant="outline"
+                      className="border-slate-700 text-slate-300"
+                    >
+                      Location: {currentProgramItem.location}
+                    </Badge>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-slate-400">
+                No active program item right now.
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>
