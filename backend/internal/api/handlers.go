@@ -176,6 +176,10 @@ func (h *Handler) createProgramItem(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
+	if !programitem.IsAllowedType(body.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": programitem.ErrInvalidType.Error()})
+		return
+	}
 
 	snap, err := h.programItemManager.Create(programitem.CreateInput{
 		SessionID:               sessionID,
@@ -235,6 +239,10 @@ func (h *Handler) updateProgramItem(c *gin.Context) {
 	var body updateProgramItemBody
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if body.Type != nil && !programitem.IsAllowedType(*body.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": programitem.ErrInvalidType.Error()})
 		return
 	}
 
@@ -508,6 +516,8 @@ func (h *Handler) writeProgramItemErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, programitem.ErrSessionNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.Is(err, programitem.ErrInvalidType):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, programitem.ErrOverlap), errors.Is(err, programitem.ErrDuplicatePosition), errors.Is(err, programitem.ErrInvalidRange), errors.Is(err, programitem.ErrInvalidStatus):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	default:

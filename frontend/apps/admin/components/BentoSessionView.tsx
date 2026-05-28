@@ -3,12 +3,18 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   getSessionSnapshot,
+  getProgramItems,
+  createProgramItem,
+  cancelProgramItem,
+  reorderProgramItems,
   startSession,
   pauseSession,
   resumeSession,
   endSession,
   adjustSessionTime,
   SessionSnapshot,
+  ProgramItemSnapshot,
+  ProgramItemCreateInput,
 } from "@/lib/actions";
 import { formatClock } from "@/lib/session";
 import { getViewerUrl } from "@/lib/backend";
@@ -47,9 +53,11 @@ interface BentoSessionViewProps {
 
 export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
   const [session, setSession] = useState<SessionSnapshot | null>(null);
+  const [programItems, setProgramItems] = useState<ProgramItemSnapshot[]>([]);
   const [controlToken, setControlToken] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [programItemError, setProgramItemError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   // Mock data for demonstration - replace with real data
@@ -82,11 +90,21 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     setControlToken(token);
 
     startTransition(async () => {
-      const result = await getSessionSnapshot(sessionId);
-      if (result.error) {
-        setLoadError(result.error);
-      } else if (result.session) {
-        setSession(result.session);
+      const [sessionResult, programItemsResult] = await Promise.all([
+        getSessionSnapshot(sessionId),
+        getProgramItems(sessionId),
+      ]);
+
+      if (sessionResult.error) {
+        setLoadError(sessionResult.error);
+      } else if (sessionResult.session) {
+        setSession(sessionResult.session);
+      }
+
+      if (programItemsResult.error) {
+        setProgramItemError(programItemsResult.error);
+      } else {
+        setProgramItems(programItemsResult.programItems);
       }
     });
   }, [sessionId]);
@@ -139,6 +157,73 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
   const canPause = session?.status === "LIVE";
   const canResume = session?.status === "PAUSED";
   const canEnd = session?.status === "LIVE" || session?.status === "PAUSED";
+
+  const handleCreateProgramItem = (input: ProgramItemCreateInput) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await createProgramItem(sessionId, input, controlToken);
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+      const programItem = result.programItem;
+      if (programItem) {
+        setProgramItems((current) =>
+          [...current, programItem].sort((a, b) => a.position - b.position),
+        );
+      }
+    });
+  };
+
+  const handleCancelProgramItem = (itemId: string) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await cancelProgramItem(itemId, controlToken);
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+      const programItem = result.programItem;
+      if (programItem) {
+        setProgramItems((current) =>
+          current.map((item) => (item.id === itemId ? programItem : item)),
+        );
+      }
+    });
+  };
+
+  const handleReorderProgramItems = (
+    items: Array<{ id: string; position: number }>,
+  ) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await reorderProgramItems(
+        sessionId,
+        { items },
+        controlToken,
+      );
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+      setProgramItems(result.programItems);
+    });
+  };
 
   const quickActions = [
     {
@@ -382,11 +467,12 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
           </Card>
 
           <AgendaProgress
-            currentItem={3}
-            totalItems={5}
-            currentTitle="Q4 Resource Allocation"
-            timeRemaining="12m"
-            progress={60}
+            items={programItems}
+            isPending={isPending}
+            error={programItemError}
+            onCreateAction={handleCreateProgramItem}
+            onCancelAction={handleCancelProgramItem}
+            onReorderAction={handleReorderProgramItems}
           />
 
           <SessionLog

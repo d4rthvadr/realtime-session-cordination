@@ -26,8 +26,18 @@ var (
 	ErrInvalidRange      = errors.New("scheduled_start must be before scheduled_end")
 	ErrOverlap           = errors.New("program item overlaps with existing item")
 	ErrDuplicatePosition = errors.New("position already exists in session")
+	ErrInvalidType       = errors.New("invalid program item type")
 	ErrInvalidStatus     = errors.New("invalid program item status")
 )
+
+var allowedTypes = map[string]struct{}{
+	"announcement": {},
+	"break":        {},
+	"keynote":      {},
+	"lecture":      {},
+	"panel":        {},
+	"q&a":          {},
+}
 
 type ProgramItem struct {
 	ID                      string
@@ -115,6 +125,9 @@ func (m *Manager) Create(input CreateInput) (Snapshot, error) {
 	if input.SessionID == "" || input.Title == "" || input.Type == "" || input.Position <= 0 {
 		return Snapshot{}, fmt.Errorf("invalid create program item payload")
 	}
+	if !IsAllowedType(input.Type) {
+		return Snapshot{}, ErrInvalidType
+	}
 	if !m.store.SessionExists(input.SessionID) {
 		return Snapshot{}, ErrSessionNotFound
 	}
@@ -201,6 +214,9 @@ func (m *Manager) Update(id string, input UpdateInput) (Snapshot, error) {
 		item.Title = *input.Title
 	}
 	if input.Type != nil {
+		if !IsAllowedType(*input.Type) {
+			return Snapshot{}, ErrInvalidType
+		}
 		item.Type = *input.Type
 	}
 	if input.HostName != nil {
@@ -336,6 +352,11 @@ func cloneMetadata(in map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+func IsAllowedType(value string) bool {
+	_, ok := allowedTypes[value]
+	return ok
 }
 
 func newID() string {
