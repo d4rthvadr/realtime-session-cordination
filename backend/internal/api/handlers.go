@@ -323,8 +323,8 @@ func (h *Handler) reorderProgramItems(c *gin.Context) {
 	}
 
 	h.broadcastProgramItemEvent(sessionID, programitem.Event{
-		Type:        programitem.EventReordered,
-		SessionID:   sessionID,
+		Type:         programitem.EventReordered,
+		SessionID:    sessionID,
 		ProgramItems: items,
 	}, c)
 

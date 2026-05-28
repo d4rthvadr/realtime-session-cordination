@@ -16,6 +16,17 @@ Scaffold initialized. API and WebSocket implementation will be added in the next
 
 Backend logging uses structured logs via Go `slog`.
 
+## Development
+
+Use Air for backend hot reload during local development.
+
+```bash
+make install-air
+make backend
+```
+
+`make backend` runs Air with [backend/.air.toml](backend/.air.toml), rebuilding and restarting the API when Go files under `cmd/` or `internal/` change.
+
 ### Environment Variables
 
 - `LOG_LEVEL`: `debug` | `info` | `warn` | `error` (default: `info`)
