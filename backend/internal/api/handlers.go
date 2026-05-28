@@ -71,6 +71,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		protected.POST("/program-items/:itemId/cancel", h.cancelProgramItem)
 
 		apiV1.GET("/sessions/:id", h.getSession)
+		apiV1.GET("/sessions/:id/current-program-item", h.getCurrentProgramItem)
 	}
 
 	router.GET("/ws/sessions/:id", h.sessionSocket)
@@ -146,6 +147,21 @@ func (h *Handler) listProgramItems(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"programItems": items})
+}
+
+func (h *Handler) getCurrentProgramItem(c *gin.Context) {
+	if h.programItemManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+		return
+	}
+
+	item, err := h.programItemManager.CurrentSnapshot(c.Param("id"), time.Now().UTC())
+	if err != nil {
+		h.writeProgramItemErr(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"programItem": item})
 }
 
 type createProgramItemBody struct {

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -201,6 +202,40 @@ func (m *Manager) ListSnapshots(sessionID string) ([]Snapshot, error) {
 	}
 
 	return snaps, nil
+}
+
+// CurrentSnapshot returns the scheduled ProgramItem active at the provided timestamp.
+func (m *Manager) CurrentSnapshot(sessionID string, at time.Time) (*Snapshot, error) {
+	items, err := m.store.ListBySession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	now := at.UTC()
+	scheduled := make([]*ProgramItem, 0, len(items))
+	for _, item := range items {
+		if item.Status != StatusScheduled {
+			continue
+		}
+		scheduled = append(scheduled, item)
+	}
+
+	if len(scheduled) == 0 {
+		return nil, nil
+	}
+
+	sort.Slice(scheduled, func(i, j int) bool {
+		return scheduled[i].ScheduledStart.Before(scheduled[j].ScheduledStart)
+	})
+
+	for _, item := range scheduled {
+		if (item.ScheduledStart.Equal(now) || item.ScheduledStart.Before(now)) && item.ScheduledEnd.After(now) {
+			snap := buildSnapshot(item)
+			return &snap, nil
+		}
+	}
+
+	return nil, nil
 }
 
 func (m *Manager) Update(id string, input UpdateInput) (Snapshot, error) {
