@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -14,6 +15,8 @@ import (
 // SqliteStore persists ProgramItems using SQLite.
 type SqliteStore struct {
 	db *sql.DB
+	// writeMu serializes mutating operations so reorder/update checks stay stable.
+	writeMu sync.Mutex
 }
 
 func NewSqliteStore(dbPath string) (*SqliteStore, error) {
@@ -65,12 +68,38 @@ func (s *SqliteStore) runMigrations() error {
 }
 
 func (s *SqliteStore) Create(item *ProgramItem) (*ProgramItem, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	// Create runs inside one transaction so overlap and position checks see a stable view.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin create transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	metadataJSON, err := metadataToJSON(item.Metadata)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = s.db.Exec(`
+	overlap, err := txHasOverlap(tx, item.SessionID, item.ScheduledStart, item.ScheduledEnd, "")
+	if err != nil {
+		return nil, err
+	}
+	if overlap {
+		return nil, ErrOverlap
+	}
+
+	dupPos, err := txPositionExists(tx, item.SessionID, item.Position, "")
+	if err != nil {
+		return nil, err
+	}
+	if dupPos {
+		return nil, ErrDuplicatePosition
+	}
+
+	_, err = tx.Exec(`
 		INSERT INTO program_items (
 			id, session_id, title, type, status, host_name,
 			scheduled_start, scheduled_end, expected_duration_minutes,
@@ -94,6 +123,10 @@ func (s *SqliteStore) Create(item *ProgramItem) (*ProgramItem, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create program item: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit create transaction: %w", err)
 	}
 
 	return cloneItem(item), nil
@@ -150,12 +183,40 @@ func (s *SqliteStore) ListBySession(sessionID string) ([]*ProgramItem, error) {
 }
 
 func (s *SqliteStore) Update(item *ProgramItem) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	// Update validates the edited time range and position before committing the row change.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin update transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	metadataJSON, err := metadataToJSON(item.Metadata)
 	if err != nil {
 		return err
 	}
 
-	result, err := s.db.Exec(`
+	if item.Status == StatusScheduled {
+		overlap, overlapErr := txHasOverlap(tx, item.SessionID, item.ScheduledStart, item.ScheduledEnd, item.ID)
+		if overlapErr != nil {
+			return overlapErr
+		}
+		if overlap {
+			return ErrOverlap
+		}
+	}
+
+	dupPos, posErr := txPositionExists(tx, item.SessionID, item.Position, item.ID)
+	if posErr != nil {
+		return posErr
+	}
+	if dupPos {
+		return ErrDuplicatePosition
+	}
+
+	result, err := tx.Exec(`
 		UPDATE program_items
 		SET title = ?,
 		    type = ?,
@@ -195,6 +256,10 @@ func (s *SqliteStore) Update(item *ProgramItem) error {
 		return ErrNotFound
 	}
 
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit update transaction: %w", err)
+	}
+
 	return nil
 }
 
@@ -202,6 +267,9 @@ func (s *SqliteStore) Reorder(sessionID string, positions map[string]int) error 
 	if len(positions) == 0 {
 		return nil
 	}
+	// Reorder is serialized because it temporarily moves rows out of the unique position range.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -209,8 +277,88 @@ func (s *SqliteStore) Reorder(sessionID string, positions map[string]int) error 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	ids := make([]string, 0, len(positions))
+	targetPositions := make([]int, 0, len(positions))
+	seen := make(map[int]struct{}, len(positions))
 	for id, position := range positions {
+		ids = append(ids, id)
+		targetPositions = append(targetPositions, position)
+		if _, ok := seen[position]; ok {
+			return ErrDuplicatePosition
+		}
+		seen[position] = struct{}{}
+	}
+
+	existingRows, err := tx.Query(`
+		SELECT id FROM program_items WHERE session_id = ?
+	`, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to validate reorder ids: %w", err)
+	}
+	defer existingRows.Close()
+
+	existing := make(map[string]struct{})
+	for existingRows.Next() {
+		var id string
+		if scanErr := existingRows.Scan(&id); scanErr != nil {
+			return fmt.Errorf("failed to scan reorder ids: %w", scanErr)
+		}
+		existing[id] = struct{}{}
+	}
+	if err = existingRows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate reorder ids: %w", err)
+	}
+
+	for _, id := range ids {
+		if _, ok := existing[id]; !ok {
+			return ErrNotFound
+		}
+	}
+
+	occupiedRows, err := tx.Query(`
+		SELECT id, position
+		FROM program_items
+		WHERE session_id = ?
+	`, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to validate target positions: %w", err)
+	}
+	defer occupiedRows.Close()
+
+	for occupiedRows.Next() {
+		var id string
+		var position int
+		if scanErr := occupiedRows.Scan(&id, &position); scanErr != nil {
+			return fmt.Errorf("failed to scan target positions: %w", scanErr)
+		}
+		if _, isMoving := positions[id]; isMoving {
+			continue
+		}
+		if _, clashes := seen[position]; clashes {
+			return ErrDuplicatePosition
+		}
+	}
+	if err = occupiedRows.Err(); err != nil {
+		return fmt.Errorf("failed while checking target positions: %w", err)
+	}
+
+	// First move every affected row out of the way so final position writes cannot clash.
+	now := time.Now().UTC().Format(time.RFC3339)
+	for idx, id := range ids {
+		tempPosition := -1000000 - idx
+		_, execErr := tx.Exec(`
+			UPDATE program_items
+			SET position = ?, updated_at = ?
+			WHERE id = ? AND session_id = ?
+		`, tempPosition, now, id, sessionID)
+		if execErr != nil {
+			return fmt.Errorf("failed to set temporary reorder position: %w", execErr)
+		}
+	}
+
+	// Then write the requested final positions once the temporary gap is in place.
+	for _, id := range ids {
+		position := positions[id]
 		res, execErr := tx.Exec(`
 			UPDATE program_items
 			SET position = ?, updated_at = ?
@@ -236,48 +384,11 @@ func (s *SqliteStore) Reorder(sessionID string, positions map[string]int) error 
 }
 
 func (s *SqliteStore) HasOverlap(sessionID string, start, end time.Time, excludeID string) (bool, error) {
-	query := `
-		SELECT EXISTS(
-			SELECT 1
-			FROM program_items
-			WHERE session_id = ?
-			  AND status = ?
-			  AND scheduled_start < ?
-			  AND scheduled_end > ?
-	`
-
-	args := []any{sessionID, StatusScheduled, end.Format(time.RFC3339), start.Format(time.RFC3339)}
-	if excludeID != "" {
-		query += " AND id != ?"
-		args = append(args, excludeID)
-	}
-	query += ")"
-
-	var exists bool
-	err := s.db.QueryRow(query, args...).Scan(&exists)
-	if err != nil {
-		return false, fmt.Errorf("failed to check overlap: %w", err)
-	}
-
-	return exists, nil
+	return txHasOverlap(s.db, sessionID, start, end, excludeID)
 }
 
 func (s *SqliteStore) PositionExists(sessionID string, position int, excludeID string) (bool, error) {
-	query := `SELECT EXISTS(SELECT 1 FROM program_items WHERE session_id = ? AND position = ?`
-	args := []any{sessionID, position}
-	if excludeID != "" {
-		query += " AND id != ?"
-		args = append(args, excludeID)
-	}
-	query += ")"
-
-	var exists bool
-	err := s.db.QueryRow(query, args...).Scan(&exists)
-	if err != nil {
-		return false, fmt.Errorf("failed to check duplicate position: %w", err)
-	}
-
-	return exists, nil
+	return txPositionExists(s.db, sessionID, position, excludeID)
 }
 
 func (s *SqliteStore) SessionExists(sessionID string) bool {
@@ -367,4 +478,55 @@ func metadataToJSON(metadata map[string]any) (string, error) {
 	}
 
 	return string(b), nil
+}
+
+type queryRower interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func txHasOverlap(q queryRower, sessionID string, start, end time.Time, excludeID string) (bool, error) {
+	// The overlap predicate is the same one used in the PRD and Phase 1 API contract.
+	query := `
+		SELECT EXISTS(
+			SELECT 1
+			FROM program_items
+			WHERE session_id = ?
+			  AND status = ?
+			  AND scheduled_start < ?
+			  AND scheduled_end > ?
+	`
+
+	args := []any{sessionID, StatusScheduled, end.Format(time.RFC3339), start.Format(time.RFC3339)}
+	if excludeID != "" {
+		query += " AND id != ?"
+		args = append(args, excludeID)
+	}
+	query += ")"
+
+	var exists bool
+	err := q.QueryRow(query, args...).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check overlap: %w", err)
+	}
+
+	return exists, nil
+}
+
+func txPositionExists(q queryRower, sessionID string, position int, excludeID string) (bool, error) {
+	// Position is enforced per session so the timeline remains a strict ordered sequence.
+	query := `SELECT EXISTS(SELECT 1 FROM program_items WHERE session_id = ? AND position = ?`
+	args := []any{sessionID, position}
+	if excludeID != "" {
+		query += " AND id != ?"
+		args = append(args, excludeID)
+	}
+	query += ")"
+
+	var exists bool
+	err := q.QueryRow(query, args...).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check duplicate position: %w", err)
+	}
+
+	return exists, nil
 }

@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	// Program items are either scheduled normally or kept as a canceled timeline slot.
 	StatusScheduled = "scheduled"
 	StatusCanceled  = "canceled"
 )
@@ -96,6 +97,7 @@ func NewManager(store Store) *Manager {
 }
 
 func (m *Manager) Create(input CreateInput) (Snapshot, error) {
+	// Manager-level validation catches obvious payload issues before the store is touched.
 	if input.SessionID == "" || input.Title == "" || input.Type == "" || input.Position <= 0 {
 		return Snapshot{}, fmt.Errorf("invalid create program item payload")
 	}
@@ -175,6 +177,7 @@ func (m *Manager) ListSnapshots(sessionID string) ([]Snapshot, error) {
 }
 
 func (m *Manager) Update(id string, input UpdateInput) (Snapshot, error) {
+	// Update applies only the fields the client supplied, then revalidates the final item state.
 	item, err := m.store.Get(id)
 	if err != nil {
 		return Snapshot{}, err
