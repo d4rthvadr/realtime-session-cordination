@@ -7,6 +7,7 @@ import (
 	"realtime-session-coordination/backend/internal/auth"
 	"realtime-session-coordination/backend/internal/config"
 	"realtime-session-coordination/backend/internal/logging"
+	"realtime-session-coordination/backend/internal/programitem"
 	"realtime-session-coordination/backend/internal/session"
 	"realtime-session-coordination/backend/internal/user"
 	"realtime-session-coordination/backend/internal/ws"
@@ -15,25 +16,31 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// initStores creates the appropriate session and user stores based on DB_DRIVER env var.
-func initStores(cfg config.Config) (session.Store, user.Store, error) {
+// initStores creates the appropriate session, program item, and user stores based on DB_DRIVER env var.
+func initStores(cfg config.Config) (session.Store, programitem.Store, user.Store, error) {
 	switch cfg.DBDriver {
 	case "memory":
-		return session.NewMemoryStore(), user.NewMemoryStore(), nil
+		sessionStore := session.NewMemoryStore()
+		return sessionStore, programitem.NewMemoryStore(sessionStore.SessionExists), user.NewMemoryStore(), nil
 	case "sqlite":
 		sessionStore, err := session.NewSqliteStore(cfg.SqliteDBPath)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
+		}
+
+		programItemStore, err := programitem.NewSqliteStore(cfg.SqliteDBPath)
+		if err != nil {
+			return nil, nil, nil, err
 		}
 
 		userStore, err := user.NewSqliteStore(cfg.SqliteDBPath)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 
-		return sessionStore, userStore, nil
+		return sessionStore, programItemStore, userStore, nil
 	default:
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 }
 
@@ -57,7 +64,7 @@ func main() {
 	}
 	appLogger := logger.With("component", "api_server")
 
-	store, userStore, err := initStores(cfg)
+	store, programItemStore, userStore, err := initStores(cfg)
 	if err != nil {
 		appLogger.Error("store_initialization_failed", "error", err)
 		os.Exit(1)
@@ -70,8 +77,9 @@ func main() {
 	}
 
 	manager := session.NewManager(store)
+	programItemManager := programitem.NewManager(programItemStore)
 	hub := ws.NewHub(logger)
-	handler := api.NewHandler(manager, hub, authService, logger)
+	handler := api.NewHandler(manager, programItemManager, hub, authService, logger)
 
 	router := gin.New()
 	router.Use(gin.Recovery(), api.CORSMiddleware(), api.RequestLoggingMiddleware(logger))
