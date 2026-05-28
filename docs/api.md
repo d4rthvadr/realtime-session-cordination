@@ -131,6 +131,130 @@ Retrieve current session state. No authentication required (read-only).
 
 ---
 
+## ProgramItem Endpoints (Phase 1 Contract)
+
+ProgramItems are managed under a session timeline and must not overlap.
+
+All mutation endpoints below require:
+
+- `Authorization: Bearer <token>`
+- `X-Control-Token: <token>` (or `?controlToken=<token>`)
+
+Read endpoints require bearer authorization only.
+
+### ProgramItem Shape
+
+```json
+{
+  "id": "pi_abc123",
+  "sessionId": "sess_abc123",
+  "title": "Panel Discussion",
+  "type": "panel",
+  "status": "scheduled",
+  "hostName": "Alice Johnson",
+  "scheduledStart": "2026-05-28T10:20:00Z",
+  "scheduledEnd": "2026-05-28T10:40:00Z",
+  "expectedDurationMinutes": 20,
+  "position": 4,
+  "location": "Main Hall",
+  "metadata": { "track": "engineering" },
+  "createdAt": "2026-05-28T09:00:00Z",
+  "updatedAt": "2026-05-28T09:00:00Z"
+}
+```
+
+`status` values:
+
+- `scheduled`
+- `canceled`
+
+### List ProgramItems
+
+```
+GET /api/v1/sessions/:id/program-items
+Authorization: Bearer <token>
+```
+
+Returns ordered timeline items for a session, including canceled items.
+
+### Create ProgramItem
+
+```
+POST /api/v1/sessions/:id/program-items
+Authorization: Bearer <token>
+X-Control-Token: <token>
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "title": "Panel Discussion",
+  "type": "panel",
+  "hostName": "Alice Johnson",
+  "scheduledStart": "2026-05-28T10:20:00Z",
+  "scheduledEnd": "2026-05-28T10:40:00Z",
+  "expectedDurationMinutes": 20,
+  "position": 4,
+  "location": "Main Hall",
+  "metadata": { "track": "engineering" }
+}
+```
+
+Validation:
+
+- `scheduledStart < scheduledEnd`
+- no overlap with existing scheduled ProgramItems in same session
+- `position` must be unique within session
+
+### Update ProgramItem
+
+```
+PATCH /api/v1/program-items/:itemId
+Authorization: Bearer <token>
+X-Control-Token: <token>
+Content-Type: application/json
+```
+
+Allows title/type/host/time/duration/location/metadata/position updates.
+If `scheduledStart` or `scheduledEnd` changes, overlap validation runs again.
+
+### Cancel ProgramItem
+
+```
+POST /api/v1/program-items/:itemId/cancel
+Authorization: Bearer <token>
+X-Control-Token: <token>
+```
+
+Sets status to `canceled` and preserves the original timeline slot for audit and future metrics.
+
+### Reorder ProgramItems (Bulk)
+
+```
+POST /api/v1/sessions/:id/program-items/reorder
+Authorization: Bearer <token>
+X-Control-Token: <token>
+Content-Type: application/json
+```
+
+Request body:
+
+```json
+{
+  "items": [
+    { "id": "pi_1", "position": 1 },
+    { "id": "pi_2", "position": 2 },
+    { "id": "pi_3", "position": 3 }
+  ]
+}
+```
+
+Performs position updates transactionally to avoid transient uniqueness conflicts.
+
+---
+
 ## Host Control Endpoints
 
 All control endpoints require `X-Control-Token` authorization header or `?controlToken` query parameter.
@@ -353,6 +477,14 @@ Unexpected server error:
 
 ```json
 { "error": "internal server error" }
+```
+
+### 409 Conflict
+
+Conflict on overlap, invalid state mutation, or duplicate position:
+
+```json
+{ "error": "program item overlaps with existing item" }
 ```
 
 ---

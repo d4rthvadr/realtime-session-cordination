@@ -261,6 +261,11 @@ This ensures all viewers see synchronized time regardless of client clock drift.
 - `POST /api/v1/sessions` — create session
 - `GET /api/v1/sessions/:id` — get session state
 - `POST /api/v1/sessions/:id/{action}` — control actions (start/pause/resume/end/adjust-time)
+- `GET /api/v1/sessions/:id/program-items` — list timeline items
+- `POST /api/v1/sessions/:id/program-items` — create timeline item
+- `PATCH /api/v1/program-items/:itemId` — update timeline item
+- `POST /api/v1/program-items/:itemId/cancel` — cancel timeline item
+- `POST /api/v1/sessions/:id/program-items/reorder` — bulk reorder timeline items
 - `GET /ws/sessions/:id` — WebSocket upgrade
 
 **Authorization:**
@@ -272,7 +277,42 @@ Control endpoints require valid `X-Control-Token`:
 3. Compare token against session's control token
 4. Return 401 if mismatch
 
-Read-only endpoints (get session, WebSocket connect) require no auth.
+Public session read endpoints (`GET /api/v1/sessions/:id`, `GET /ws/sessions/:id`) require no auth.
+
+ProgramItem mutations require both bearer authorization and session control token.
+
+---
+
+## ProgramItem Scheduling Model (Phase 1 Contract)
+
+ProgramItems are session-scoped timeline blocks with explicit position ordering.
+
+Core rules:
+
+1. `scheduledStart` must be before `scheduledEnd`.
+2. Overlap is not allowed among scheduled items in the same session.
+3. `position` is unique per session.
+4. Reorder uses a bulk transaction to keep position integrity.
+
+Overlap predicate for create/update:
+
+```
+existing.scheduled_start < candidate.scheduled_end
+AND existing.scheduled_end > candidate.scheduled_start
+```
+
+Update operations exclude the current item id from overlap checks.
+
+### Cancellation Behavior
+
+ProgramItem deletion is represented as cancellation:
+
+1. Status changes from `scheduled` to `canceled`.
+2. Original time slot is preserved in API responses.
+3. Subsequent items are not auto-shifted.
+4. Viewer context may auto-advance to next non-canceled item.
+
+This preserves timeline history for future metrics and audit trails.
 
 ---
 
