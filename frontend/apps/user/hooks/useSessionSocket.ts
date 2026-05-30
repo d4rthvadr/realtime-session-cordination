@@ -126,6 +126,7 @@ export function useSessionSocket(sessionId: string): void {
 
             if (message.session) {
               setSnapshot(normalizeSnapshot(message.session));
+              void refreshCurrentProgramItem();
               return;
             }
 

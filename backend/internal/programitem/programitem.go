@@ -10,25 +10,31 @@ import (
 )
 
 const (
-	// Program items are either scheduled normally or kept as a canceled timeline slot.
-	StatusScheduled = "scheduled"
-	StatusCanceled  = "canceled"
+	// Program item lifecycle states.
+	StatusScheduled  = "scheduled"
+	StatusInProgress = "in_progress"
+	StatusEnded      = "ended"
+	StatusCanceled   = "canceled"
 
 	// These event types are emitted by the manager when program items change, and used by clients to trigger UI updates.
 	EventCreated   = "PROGRAM_ITEM_CREATED"
 	EventUpdated   = "PROGRAM_ITEM_UPDATED"
 	EventCanceled  = "PROGRAM_ITEM_CANCELED"
+	EventStarted   = "PROGRAM_ITEM_STARTED"
+	EventEnded     = "PROGRAM_ITEM_ENDED"
 	EventReordered = "PROGRAM_ITEMS_REORDERED"
 )
 
 var (
-	ErrNotFound          = errors.New("program item not found")
-	ErrSessionNotFound   = errors.New("session not found")
-	ErrInvalidRange      = errors.New("scheduled_start must be before scheduled_end")
-	ErrOverlap           = errors.New("program item overlaps with existing item")
-	ErrDuplicatePosition = errors.New("position already exists in session")
-	ErrInvalidType       = errors.New("invalid program item type")
-	ErrInvalidStatus     = errors.New("invalid program item status")
+	ErrNotFound                = errors.New("program item not found")
+	ErrSessionNotFound         = errors.New("session not found")
+	ErrInvalidRange            = errors.New("scheduled_start must be before scheduled_end")
+	ErrOverlap                 = errors.New("program item overlaps with existing item")
+	ErrDuplicatePosition       = errors.New("position already exists in session")
+	ErrInvalidType             = errors.New("invalid program item type")
+	ErrInvalidStatus           = errors.New("invalid program item status")
+	ErrInvalidStatusTransition = errors.New("invalid program item status transition")
+	ErrInProgressExists        = errors.New("another program item is already in progress")
 )
 
 var allowedTypes = map[string]struct{}{
@@ -46,6 +52,8 @@ type ProgramItem struct {
 	Title                   string
 	Type                    string
 	Status                  string
+	ActualStart             *time.Time
+	ActualEnd               *time.Time
 	HostName                string
 	ScheduledStart          time.Time
 	ScheduledEnd            time.Time
@@ -63,6 +71,8 @@ type Snapshot struct {
 	Title                   string         `json:"title"`
 	Type                    string         `json:"type"`
 	Status                  string         `json:"status"`
+	ActualStart             *time.Time     `json:"actualStart,omitempty"`
+	ActualEnd               *time.Time     `json:"actualEnd,omitempty"`
 	HostName                string         `json:"hostName,omitempty"`
 	ScheduledStart          time.Time      `json:"scheduledStart"`
 	ScheduledEnd            time.Time      `json:"scheduledEnd"`
@@ -110,6 +120,7 @@ type Event struct {
 	Type         string     `json:"type"`
 	SessionID    string     `json:"sessionId,omitempty"`
 	ProgramItem  *Snapshot  `json:"programItem,omitempty"`
+	NextProgramItem *Snapshot `json:"nextProgramItem,omitempty"`
 	ProgramItems []Snapshot `json:"programItems,omitempty"`
 }
 
@@ -204,38 +215,97 @@ func (m *Manager) ListSnapshots(sessionID string) ([]Snapshot, error) {
 	return snaps, nil
 }
 
-// CurrentSnapshot returns the scheduled ProgramItem active at the provided timestamp.
-func (m *Manager) CurrentSnapshot(sessionID string, at time.Time) (*Snapshot, error) {
+// CurrentAndNextSnapshots returns current and next ProgramItem context for a session.
+func (m *Manager) CurrentAndNextSnapshots(sessionID string, at time.Time) (*Snapshot, *Snapshot, error) {
 	items, err := m.store.ListBySession(sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	now := at.UTC()
+
+	sorted := make([]*ProgramItem, 0, len(items))
+	for _, item := range items {
+		sorted = append(sorted, item)
+	}
+
+	if len(sorted) == 0 {
+		return nil, nil, nil
+	}
+
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Position == sorted[j].Position {
+			return sorted[i].ScheduledStart.Before(sorted[j].ScheduledStart)
+		}
+		return sorted[i].Position < sorted[j].Position
+	})
+
+	var current *ProgramItem
+	for _, item := range sorted {
+		if item.Status == StatusInProgress {
+			current = item
+			break
+		}
+	}
+
+	if current == nil {
+		for _, item := range sorted {
+			if item.Status != StatusScheduled {
+				continue
+			}
+			if (item.ScheduledStart.Equal(now) || item.ScheduledStart.Before(now)) && item.ScheduledEnd.After(now) {
+				current = item
+				break
+			}
+		}
+	}
+
+	var next *ProgramItem
+	if current != nil {
+		for _, item := range sorted {
+			if item.Status != StatusScheduled {
+				continue
+			}
+			if item.Position > current.Position {
+				next = item
+				break
+			}
+		}
+	} else {
+		for _, item := range sorted {
+			if item.Status != StatusScheduled {
+				continue
+			}
+			if item.ScheduledStart.After(now) || item.ScheduledStart.Equal(now) {
+				next = item
+				break
+			}
+		}
+	}
+
+	var currentSnap *Snapshot
+	if current != nil {
+		snap := buildSnapshot(current)
+		currentSnap = &snap
+	}
+
+	var nextSnap *Snapshot
+	if next != nil {
+		snap := buildSnapshot(next)
+		nextSnap = &snap
+	}
+
+	return currentSnap, nextSnap, nil
+}
+
+// CurrentSnapshot returns the currently active ProgramItem context for backwards compatibility.
+func (m *Manager) CurrentSnapshot(sessionID string, at time.Time) (*Snapshot, error) {
+	current, _, err := m.CurrentAndNextSnapshots(sessionID, at)
 	if err != nil {
 		return nil, err
 	}
 
-	now := at.UTC()
-	scheduled := make([]*ProgramItem, 0, len(items))
-	for _, item := range items {
-		if item.Status != StatusScheduled {
-			continue
-		}
-		scheduled = append(scheduled, item)
-	}
-
-	if len(scheduled) == 0 {
-		return nil, nil
-	}
-
-	sort.Slice(scheduled, func(i, j int) bool {
-		return scheduled[i].ScheduledStart.Before(scheduled[j].ScheduledStart)
-	})
-
-	for _, item := range scheduled {
-		if (item.ScheduledStart.Equal(now) || item.ScheduledStart.Before(now)) && item.ScheduledEnd.After(now) {
-			snap := buildSnapshot(item)
-			return &snap, nil
-		}
-	}
-
-	return nil, nil
+	return current, nil
 }
 
 func (m *Manager) Update(id string, input UpdateInput) (Snapshot, error) {
@@ -334,6 +404,62 @@ func (m *Manager) Cancel(id string) (Snapshot, error) {
 	return buildSnapshot(item), nil
 }
 
+func (m *Manager) Start(id string) (Snapshot, error) {
+	item, err := m.store.Get(id)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	if item.Status != StatusScheduled {
+		return Snapshot{}, ErrInvalidStatusTransition
+	}
+
+	hasInProgress, err := m.store.HasInProgressItem(item.SessionID, item.ID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if hasInProgress {
+		return Snapshot{}, ErrInProgressExists
+	}
+
+	now := time.Now().UTC()
+	item.Status = StatusInProgress
+	item.ActualStart = &now
+	item.ActualEnd = nil
+	item.UpdatedAt = now
+
+	if err = m.store.Update(item); err != nil {
+		return Snapshot{}, err
+	}
+
+	return buildSnapshot(item), nil
+}
+
+func (m *Manager) End(id string) (Snapshot, error) {
+	item, err := m.store.Get(id)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	if item.Status != StatusInProgress {
+		return Snapshot{}, ErrInvalidStatusTransition
+	}
+
+	now := time.Now().UTC()
+	item.Status = StatusEnded
+	if item.ActualStart == nil {
+		item.ActualStart = &now
+	}
+	item.ActualEnd = &now
+	item.UpdatedAt = now
+
+	if err = m.store.Update(item); err != nil {
+		return Snapshot{}, err
+	}
+
+	return buildSnapshot(item), nil
+}
+
 func (m *Manager) Reorder(sessionID string, items []ReorderItem) ([]Snapshot, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("invalid reorder program items payload")
@@ -366,6 +492,8 @@ func buildSnapshot(item *ProgramItem) Snapshot {
 		Title:                   item.Title,
 		Type:                    item.Type,
 		Status:                  item.Status,
+		ActualStart:             item.ActualStart,
+		ActualEnd:               item.ActualEnd,
 		HostName:                item.HostName,
 		ScheduledStart:          item.ScheduledStart,
 		ScheduledEnd:            item.ScheduledEnd,

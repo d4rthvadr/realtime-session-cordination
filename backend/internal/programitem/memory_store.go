@@ -163,6 +163,25 @@ func (ms *MemoryStore) PositionExists(sessionID string, position int, excludeID 
 	return ms.positionExistsLocked(sessionID, position, excludeID), nil
 }
 
+func (ms *MemoryStore) HasInProgressItem(sessionID string, excludeID string) (bool, error) {
+	unlock := ms.lockSession(sessionID)
+	defer unlock()
+
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+
+	for _, item := range ms.items {
+		if item.SessionID != sessionID || item.ID == excludeID {
+			continue
+		}
+		if item.Status == StatusInProgress {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func (ms *MemoryStore) SessionExists(sessionID string) bool {
 	if ms.sessionExistsFn == nil {
 		return false

@@ -69,6 +69,8 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		protected.POST("/sessions/:id/adjust-time", h.adjustTime)
 		protected.PATCH("/program-items/:itemId", h.updateProgramItem)
 		protected.POST("/program-items/:itemId/cancel", h.cancelProgramItem)
+		protected.POST("/program-items/:itemId/start", h.startProgramItem)
+		protected.POST("/program-items/:itemId/end", h.endProgramItem)
 
 		apiV1.GET("/sessions/:id", h.getSession)
 		apiV1.GET("/sessions/:id/current-program-item", h.getCurrentProgramItem)
@@ -155,13 +157,13 @@ func (h *Handler) getCurrentProgramItem(c *gin.Context) {
 		return
 	}
 
-	item, err := h.programItemManager.CurrentSnapshot(c.Param("id"), time.Now().UTC())
+	item, nextItem, err := h.programItemManager.CurrentAndNextSnapshots(c.Param("id"), time.Now().UTC())
 	if err != nil {
 		h.writeProgramItemErr(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"programItem": item})
+	c.JSON(http.StatusOK, gin.H{"programItem": item, "nextProgramItem": nextItem})
 }
 
 type createProgramItemBody struct {
@@ -317,6 +319,88 @@ func (h *Handler) cancelProgramItem(c *gin.Context) {
 	}, c)
 
 	c.JSON(http.StatusOK, gin.H{"programItem": snap})
+}
+
+func (h *Handler) startProgramItem(c *gin.Context) {
+	if h.programItemManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+		return
+	}
+
+	itemID := c.Param("itemId")
+	item, err := h.programItemManager.GetSnapshot(itemID)
+	if err != nil {
+		h.writeProgramItemErr(c, err)
+		return
+	}
+	if !h.authorizeControl(c, item.SessionID) {
+		return
+	}
+	if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
+		return
+	}
+
+	snap, err := h.programItemManager.Start(itemID)
+	if err != nil {
+		h.writeProgramItemErr(c, err)
+		return
+	}
+
+	_, nextSnap, nextErr := h.programItemManager.CurrentAndNextSnapshots(item.SessionID, time.Now().UTC())
+	if nextErr != nil {
+		h.writeProgramItemErr(c, nextErr)
+		return
+	}
+
+	h.broadcastProgramItemEvent(item.SessionID, programitem.Event{
+		Type:            programitem.EventStarted,
+		SessionID:       item.SessionID,
+		ProgramItem:     &snap,
+		NextProgramItem: nextSnap,
+	}, c)
+
+	c.JSON(http.StatusOK, gin.H{"programItem": snap, "nextProgramItem": nextSnap})
+}
+
+func (h *Handler) endProgramItem(c *gin.Context) {
+	if h.programItemManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+		return
+	}
+
+	itemID := c.Param("itemId")
+	item, err := h.programItemManager.GetSnapshot(itemID)
+	if err != nil {
+		h.writeProgramItemErr(c, err)
+		return
+	}
+	if !h.authorizeControl(c, item.SessionID) {
+		return
+	}
+	if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
+		return
+	}
+
+	snap, err := h.programItemManager.End(itemID)
+	if err != nil {
+		h.writeProgramItemErr(c, err)
+		return
+	}
+
+	_, nextSnap, nextErr := h.programItemManager.CurrentAndNextSnapshots(item.SessionID, time.Now().UTC())
+	if nextErr != nil {
+		h.writeProgramItemErr(c, nextErr)
+		return
+	}
+
+	h.broadcastProgramItemEvent(item.SessionID, programitem.Event{
+		Type:            programitem.EventEnded,
+		SessionID:       item.SessionID,
+		ProgramItem:     &snap,
+		NextProgramItem: nextSnap,
+	}, c)
+
+	c.JSON(http.StatusOK, gin.H{"programItem": snap, "nextProgramItem": nextSnap})
 }
 
 type reorderProgramItemsBody struct {
@@ -513,6 +597,21 @@ func (h *Handler) requireAuth() gin.HandlerFunc {
 	}
 }
 
+func (h *Handler) ensureProgramItemRuntimeAllowed(c *gin.Context, sessionID string) bool {
+	snap, err := h.manager.GetSnapshot(sessionID)
+	if err != nil {
+		h.writeDomainErr(c, err)
+		return false
+	}
+
+	if snap.Status != session.StatusLive && snap.Status != session.StatusPaused {
+		c.JSON(http.StatusConflict, gin.H{"error": "program item runtime transitions require session status LIVE or PAUSED"})
+		return false
+	}
+
+	return true
+}
+
 func (h *Handler) writeDomainErr(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, session.ErrNotFound):
@@ -534,7 +633,7 @@ func (h *Handler) writeProgramItemErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, programitem.ErrInvalidType):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	case errors.Is(err, programitem.ErrOverlap), errors.Is(err, programitem.ErrDuplicatePosition), errors.Is(err, programitem.ErrInvalidRange), errors.Is(err, programitem.ErrInvalidStatus):
+	case errors.Is(err, programitem.ErrOverlap), errors.Is(err, programitem.ErrDuplicatePosition), errors.Is(err, programitem.ErrInvalidRange), errors.Is(err, programitem.ErrInvalidStatus), errors.Is(err, programitem.ErrInvalidStatusTransition), errors.Is(err, programitem.ErrInProgressExists):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

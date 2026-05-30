@@ -391,6 +391,30 @@ func (s *SqliteStore) PositionExists(sessionID string, position int, excludeID s
 	return txPositionExists(s.db, sessionID, position, excludeID)
 }
 
+func (s *SqliteStore) HasInProgressItem(sessionID string, excludeID string) (bool, error) {
+	query := `
+		SELECT EXISTS(
+			SELECT 1
+			FROM program_items
+			WHERE session_id = ?
+			  AND status = ?
+	`
+	args := []any{sessionID, StatusInProgress}
+	if excludeID != "" {
+		query += " AND id != ?"
+		args = append(args, excludeID)
+	}
+	query += ")"
+
+	var exists bool
+	err := s.db.QueryRow(query, args...).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check in-progress item: %w", err)
+	}
+
+	return exists, nil
+}
+
 func (s *SqliteStore) SessionExists(sessionID string) bool {
 	var exists bool
 	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)`, sessionID).Scan(&exists)

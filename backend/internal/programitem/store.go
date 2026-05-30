@@ -11,5 +11,6 @@ type Store interface {
 	Reorder(sessionID string, positions map[string]int) error
 	HasOverlap(sessionID string, start, end time.Time, excludeID string) (bool, error)
 	PositionExists(sessionID string, position int, excludeID string) (bool, error)
+	HasInProgressItem(sessionID string, excludeID string) (bool, error)
 	SessionExists(sessionID string) bool
 }
