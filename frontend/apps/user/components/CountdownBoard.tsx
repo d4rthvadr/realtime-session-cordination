@@ -45,6 +45,7 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
   const currentProgramItem = useSessionStore(
     (state) => state.currentProgramItem,
   );
+  const nextProgramItem = useSessionStore((state) => state.nextProgramItem);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useSessionSocket(sessionId);
@@ -187,20 +188,32 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
 
           <div className="mt-8 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
             <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-              Current Program Item
+              Program Timeline
             </p>
 
             {currentProgramItem ? (
-              <div className="mt-3 space-y-2">
-                <p className="text-lg font-semibold text-slate-100 sm:text-xl">
+              <div className="mt-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4">
+                <div className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                  <p className="text-xs uppercase tracking-[0.18em] text-emerald-300">
+                    Now Live
+                  </p>
+                </div>
+                <p className="mt-2 text-lg font-semibold text-slate-100 sm:text-xl">
                   {currentProgramItem.title}
                 </p>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Badge
                     variant="outline"
                     className="border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
                   >
                     {currentProgramItem.type.toUpperCase()}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className="border-slate-700 text-slate-300"
+                  >
+                    {currentProgramItem.status.replace("_", " ").toUpperCase()}
                   </Badge>
                   {currentProgramItem.hostName ? (
                     <Badge
@@ -225,6 +238,33 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
                 No active program item right now.
               </p>
             )}
+
+            {nextProgramItem ? (
+              <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                  Up Next
+                </p>
+                <p className="mt-2 text-base font-medium text-slate-200 sm:text-lg">
+                  {nextProgramItem.title}
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className="border-slate-700 text-slate-300"
+                  >
+                    {nextProgramItem.type.toUpperCase()}
+                  </Badge>
+                  {nextProgramItem.hostName ? (
+                    <Badge
+                      variant="outline"
+                      className="border-slate-700 text-slate-300"
+                    >
+                      Host: {nextProgramItem.hostName}
+                    </Badge>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </div>
         </CardContent>
       </Card>

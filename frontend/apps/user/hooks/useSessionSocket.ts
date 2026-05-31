@@ -24,6 +24,14 @@ interface BackendSessionResponse {
 
 interface BackendCurrentProgramItemResponse {
   programItem: ProgramItemSnapshot | null;
+  nextProgramItem?: ProgramItemSnapshot | null;
+}
+
+interface BackendProgramItemMessage {
+  type?: string;
+  session?: BackendSessionResponse["session"];
+  programItem?: ProgramItemSnapshot | null;
+  nextProgramItem?: ProgramItemSnapshot | null;
 }
 
 function normalizeSnapshot(snapshot: BackendSessionSnapshot): SessionSnapshot {
@@ -42,6 +50,7 @@ export function useSessionSocket(sessionId: string): void {
   const setCurrentProgramItem = useSessionStore(
     (state) => state.setCurrentProgramItem,
   );
+  const setNextProgramItem = useSessionStore((state) => state.setNextProgramItem);
   const setConnectionState = useSessionStore(
     (state) => state.setConnectionState,
   );
@@ -72,6 +81,7 @@ export function useSessionSocket(sessionId: string): void {
           (await response.json()) as BackendCurrentProgramItemResponse;
         if (!cancelled) {
           setCurrentProgramItem(payload.programItem ?? null);
+          setNextProgramItem(payload.nextProgramItem ?? null);
         }
       } catch {
         // Ignore refresh failures and keep last known value.
@@ -119,10 +129,7 @@ export function useSessionSocket(sessionId: string): void {
           }
 
           try {
-            const message = JSON.parse(String(event.data)) as {
-              type?: string;
-              session?: BackendSessionResponse["session"];
-            };
+            const message = JSON.parse(String(event.data)) as BackendProgramItemMessage;
 
             if (message.session) {
               setSnapshot(normalizeSnapshot(message.session));
@@ -131,9 +138,21 @@ export function useSessionSocket(sessionId: string): void {
             }
 
             if (
+              message.type === "PROGRAM_ITEM_STARTED" ||
+              message.type === "PROGRAM_ITEM_ENDED"
+            ) {
+              setCurrentProgramItem(message.programItem ?? null);
+              setNextProgramItem(message.nextProgramItem ?? null);
+              void refreshCurrentProgramItem();
+              return;
+            }
+
+            if (
               message.type === "PROGRAM_ITEM_CREATED" ||
               message.type === "PROGRAM_ITEM_UPDATED" ||
               message.type === "PROGRAM_ITEM_CANCELED" ||
+              message.type === "PROGRAM_ITEM_STARTED" ||
+              message.type === "PROGRAM_ITEM_ENDED" ||
               message.type === "PROGRAM_ITEMS_REORDERED"
             ) {
               void refreshCurrentProgramItem();
@@ -191,6 +210,7 @@ export function useSessionSocket(sessionId: string): void {
     resetSession,
     sessionId,
     setCurrentProgramItem,
+    setNextProgramItem,
     setConnectionState,
     setSessionNotFound,
     setSnapshot,

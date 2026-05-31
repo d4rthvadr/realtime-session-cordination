@@ -1,6 +1,7 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 
 const AUTH_BACKEND_URL =
   process.env.NEXT_PUBLIC_AUTH_BACKEND_URL || "http://localhost:8080";
@@ -30,6 +31,24 @@ function setAdminAuthCookie(token: string) {
     path: "/",
     maxAge: AUTH_COOKIE_MAX_AGE_SECONDS,
   });
+}
+
+function clearAdminAuthCookie() {
+  const cookieStore = cookies();
+  cookieStore.set({
+    name: AUTH_COOKIE_NAME,
+    value: "",
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
+}
+
+export async function signOutAdmin(): Promise<never> {
+  clearAdminAuthCookie();
+  redirect("/signin");
 }
 
 // Send OTP to email

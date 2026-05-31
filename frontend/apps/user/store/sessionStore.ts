@@ -8,7 +8,7 @@ export interface ProgramItemSnapshot {
   sessionId: string;
   title: string;
   type: string;
-  status: "scheduled" | "canceled";
+  status: "scheduled" | "in_progress" | "ended" | "canceled";
   hostName?: string;
   scheduledStart: string;
   scheduledEnd: string;
@@ -34,8 +34,10 @@ interface SessionStore extends SessionSnapshot {
   hasReceivedSnapshot: boolean;
   sessionNotFound: boolean;
   currentProgramItem: ProgramItemSnapshot | null;
+  nextProgramItem: ProgramItemSnapshot | null;
   setSnapshot: (snapshot: Partial<SessionSnapshot>) => void;
   setCurrentProgramItem: (item: ProgramItemSnapshot | null) => void;
+  setNextProgramItem: (item: ProgramItemSnapshot | null) => void;
   setConnectionState: (state: ConnectionState) => void;
   setSessionNotFound: (notFound: boolean) => void;
   resetSession: () => void;
@@ -56,6 +58,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
   hasReceivedSnapshot: false,
   sessionNotFound: false,
   currentProgramItem: null,
+  nextProgramItem: null,
   setSnapshot: (snapshot) =>
     set({
       ...snapshot,
@@ -64,6 +67,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
       sessionNotFound: false,
     }),
   setCurrentProgramItem: (currentProgramItem) => set({ currentProgramItem }),
+  setNextProgramItem: (nextProgramItem) => set({ nextProgramItem }),
   setConnectionState: (connectionState) => set({ connectionState }),
   setSessionNotFound: (sessionNotFound) => set({ sessionNotFound }),
   resetSession: () =>
@@ -73,5 +77,6 @@ export const useSessionStore = create<SessionStore>((set) => ({
       hasReceivedSnapshot: false,
       sessionNotFound: false,
       currentProgramItem: null,
+      nextProgramItem: null,
     }),
 }));
