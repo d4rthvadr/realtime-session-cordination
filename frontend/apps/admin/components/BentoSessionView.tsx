@@ -7,6 +7,9 @@ import {
   createProgramItem,
   cancelProgramItem,
   startProgramItem,
+  pauseProgramItem,
+  resumeProgramItem,
+  adjustProgramItemTime,
   endProgramItem,
   reorderProgramItems,
   startSession,
@@ -259,6 +262,88 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     setProgramItemError(null);
     startTransition(async () => {
       const result = await endProgramItem(itemId, controlToken);
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+
+      if (result.runtime) {
+        setRuntime(result.runtime);
+      }
+
+      const listResult = await getProgramItems(sessionId);
+      if (!listResult.error) {
+        setProgramItems(listResult.programItems);
+      }
+    });
+  };
+
+  const handlePauseProgramItem = (itemId: string) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await pauseProgramItem(itemId, controlToken);
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+
+      if (result.runtime) {
+        setRuntime(result.runtime);
+      }
+
+      const listResult = await getProgramItems(sessionId);
+      if (!listResult.error) {
+        setProgramItems(listResult.programItems);
+      }
+    });
+  };
+
+  const handleResumeProgramItem = (itemId: string) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await resumeProgramItem(itemId, controlToken);
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+
+      if (result.runtime) {
+        setRuntime(result.runtime);
+      }
+
+      const listResult = await getProgramItems(sessionId);
+      if (!listResult.error) {
+        setProgramItems(listResult.programItems);
+      }
+    });
+  };
+
+  const handleAdjustProgramItemTime = (
+    itemId: string,
+    deltaSeconds: number,
+  ) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await adjustProgramItemTime(
+        itemId,
+        { deltaSeconds },
+        controlToken,
+      );
       if (result.error) {
         setProgramItemError(result.error);
         return;
@@ -555,7 +640,10 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
             onCreateAction={handleCreateProgramItem}
             onCancelAction={handleCancelProgramItem}
             onStartAction={handleStartProgramItem}
+            onPauseAction={handlePauseProgramItem}
+            onResumeAction={handleResumeProgramItem}
             onEndAction={handleEndProgramItem}
+            onAdjustTimeAction={handleAdjustProgramItemTime}
             onReorderAction={handleReorderProgramItems}
             runtimeEnabled={isProgramItemRuntimeAllowed}
           />

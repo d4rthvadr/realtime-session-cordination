@@ -684,6 +684,141 @@ export async function startProgramItem(itemId: string, controlToken: string) {
   }
 }
 
+// POST /api/v1/program-items/:itemId/pause - Pause program item
+export async function pauseProgramItem(itemId: string, controlToken: string) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/program-items/${itemId}/pause`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "X-Control-Token": controlToken,
+        },
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to pause program item: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return runtimeResult(normalizeRuntimePayload(data), null);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to pause program item";
+    return runtimeResult(null, message);
+  }
+}
+
+// POST /api/v1/program-items/:itemId/resume - Resume program item
+export async function resumeProgramItem(itemId: string, controlToken: string) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/program-items/${itemId}/resume`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "X-Control-Token": controlToken,
+        },
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to resume program item: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return runtimeResult(normalizeRuntimePayload(data), null);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to resume program item";
+    return runtimeResult(null, message);
+  }
+}
+
+// POST /api/v1/program-items/:itemId/adjust-time - Adjust program item time
+export async function adjustProgramItemTime(
+  itemId: string,
+  input: AdjustTimeInput,
+  controlToken: string,
+) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/program-items/${itemId}/adjust-time`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "X-Control-Token": controlToken,
+        },
+        body: JSON.stringify(input),
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to adjust program item time: ${response.statusText}`,
+      );
+    }
+
+    const data = await response.json();
+    return runtimeResult(normalizeRuntimePayload(data), null);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to adjust program item time";
+    return runtimeResult(null, message);
+  }
+}
+
 // POST /api/v1/program-items/:itemId/end - End program item
 export async function endProgramItem(itemId: string, controlToken: string) {
   try {

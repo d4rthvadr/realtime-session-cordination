@@ -22,7 +22,10 @@ import {
   XCircle,
   Plus,
   Play,
+  Pause,
+  RotateCcw,
   Square,
+  Minus,
 } from "lucide-react";
 import type {
   ProgramItemCreateInput,
@@ -45,7 +48,10 @@ interface AgendaProgressProps {
   onCreateAction: (input: ProgramItemCreateInput) => void;
   onCancelAction: (itemId: string) => void;
   onStartAction: (itemId: string) => void;
+  onPauseAction: (itemId: string) => void;
+  onResumeAction: (itemId: string) => void;
   onEndAction: (itemId: string) => void;
+  onAdjustTimeAction: (itemId: string, deltaSeconds: number) => void;
   onReorderAction: (items: Array<{ id: string; position: number }>) => void;
   runtimeEnabled: boolean;
 }
@@ -57,7 +63,10 @@ export default function AgendaProgress({
   onCreateAction,
   onCancelAction,
   onStartAction,
+  onPauseAction,
+  onResumeAction,
   onEndAction,
+  onAdjustTimeAction,
   onReorderAction,
   runtimeEnabled,
 }: AgendaProgressProps) {
@@ -311,9 +320,9 @@ export default function AgendaProgress({
                           ? "border-sky-300 text-sky-700"
                           : item.status === "paused"
                             ? "border-indigo-300 text-indigo-700"
-                          : item.status === "ended"
-                            ? "border-slate-300 text-slate-700"
-                            : "border-emerald-300 text-emerald-700"
+                            : item.status === "ended"
+                              ? "border-slate-300 text-slate-700"
+                              : "border-emerald-300 text-emerald-700"
                     }
                   >
                     {item.status.toUpperCase()}
@@ -370,6 +379,32 @@ export default function AgendaProgress({
                       type="button"
                       size="sm"
                       variant="outline"
+                      className="h-7 rounded-full text-amber-700 border-amber-300"
+                      disabled={isPending || !runtimeEnabled}
+                      onClick={() =>
+                        item.status === "in_progress"
+                          ? onPauseAction(item.id)
+                          : onResumeAction(item.id)
+                      }
+                    >
+                      {item.status === "in_progress" ? (
+                        <>
+                          <Pause className="mr-1 h-3 w-3" />
+                          Pause
+                        </>
+                      ) : (
+                        <>
+                          <RotateCcw className="mr-1 h-3 w-3" />
+                          Resume
+                        </>
+                      )}
+                    </Button>
+                  ) : null}
+                  {item.status === "in_progress" || item.status === "paused" ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
                       className="h-7 rounded-full text-sky-700 border-sky-300"
                       disabled={isPending || !runtimeEnabled}
                       onClick={() => onEndAction(item.id)}
@@ -377,6 +412,32 @@ export default function AgendaProgress({
                       <Square className="mr-1 h-3 w-3" />
                       End
                     </Button>
+                  ) : null}
+                  {item.status === "in_progress" || item.status === "paused" ? (
+                    <>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 rounded-full"
+                        disabled={isPending || !runtimeEnabled}
+                        onClick={() => onAdjustTimeAction(item.id, 60)}
+                      >
+                        <Plus className="mr-1 h-3 w-3" />
+                        60s
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 rounded-full"
+                        disabled={isPending || !runtimeEnabled}
+                        onClick={() => onAdjustTimeAction(item.id, -60)}
+                      >
+                        <Minus className="mr-1 h-3 w-3" />
+                        60s
+                      </Button>
+                    </>
                   ) : null}
                   {item.status === "scheduled" ? (
                     <Button
