@@ -64,38 +64,56 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
   }, [status, serverNowMs]);
 
   const remainingSeconds = useMemo(() => {
+    if (!currentProgramItem) {
+      return 0;
+    }
+
     const baseRemaining =
-      typeof serverRemainingSeconds === "number"
-        ? serverRemainingSeconds
-        : Number(serverRemainingSeconds);
+      typeof currentProgramItem.remainingSeconds === "number"
+        ? currentProgramItem.remainingSeconds
+        : Number(currentProgramItem.remainingSeconds);
 
     if (!Number.isFinite(baseRemaining)) {
       return 0;
     }
 
-    if (status !== "LIVE") {
+    if (status !== "LIVE" || currentProgramItem.status !== "in_progress") {
       return baseRemaining;
     }
 
     const baseNow = typeof serverNowMs === "number" ? serverNowMs : nowMs;
     const elapsedSeconds = Math.max(0, Math.floor((nowMs - baseNow) / 1000));
     return baseRemaining - elapsedSeconds;
-  }, [serverNowMs, serverRemainingSeconds, status, nowMs]);
+  }, [currentProgramItem, serverNowMs, status, nowMs]);
+
+  const countdownBudgetSeconds = useMemo(() => {
+    if (!currentProgramItem) {
+      return 0;
+    }
+
+    const base =
+      Number(currentProgramItem.runtimeDurationSeconds) +
+      Number(currentProgramItem.adjustmentSeconds);
+    return Number.isFinite(base) ? base : 0;
+  }, [currentProgramItem]);
 
   const timerState = useMemo(
-    () => getTimerState(remainingSeconds, durationSeconds),
-    [remainingSeconds, durationSeconds],
+    () => getTimerState(remainingSeconds, countdownBudgetSeconds),
+    [remainingSeconds, countdownBudgetSeconds],
   );
 
   const progressValue = useMemo(() => {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    if (
+      !Number.isFinite(countdownBudgetSeconds) ||
+      countdownBudgetSeconds <= 0
+    ) {
       return 0;
     }
 
     const cappedRemaining = Math.max(0, remainingSeconds);
-    const elapsed = durationSeconds - cappedRemaining;
-    return Math.min(100, Math.max(0, (elapsed / durationSeconds) * 100));
-  }, [durationSeconds, remainingSeconds]);
+    const elapsed = countdownBudgetSeconds - cappedRemaining;
+    return Math.min(100, Math.max(0, (elapsed / countdownBudgetSeconds) * 100));
+  }, [countdownBudgetSeconds, remainingSeconds]);
 
   const isLoadingInitialSession = !hasReceivedSnapshot;
 
@@ -159,7 +177,7 @@ export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
               {remainingSeconds < 0 ? "-" : ""}
               {formatDuration(remainingSeconds)}
               <span className="ml-2 text-3xl font-semibold text-slate-400 sm:text-5xl">
-                / {formatDuration(durationSeconds)}
+                / {formatDuration(countdownBudgetSeconds)}
               </span>
             </p>
           </div>
