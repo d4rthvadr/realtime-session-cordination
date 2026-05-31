@@ -1,5 +1,123 @@
 # API Structure & Endpoints
 
+## Runtime Contract Update (2026-05)
+
+This section is the active contract for runtime countdown behavior and response shapes.
+Older examples below remain useful historical context, but runtime control endpoints now return a unified envelope.
+
+### Unified Runtime Envelope
+
+Runtime endpoints now return:
+
+```json
+{
+  "type": "SESSION_PAUSED",
+  "session": {
+    "id": "sess_abc123",
+    "title": "Engineering Talks Q&A",
+    "speakerName": "Alice Johnson",
+    "durationSeconds": 600,
+    "status": "PAUSED",
+    "remainingSeconds": 312,
+    "createdAt": "2026-05-31T10:00:00Z"
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "sessionId": "sess_abc123",
+    "title": "Panel Discussion",
+    "type": "panel",
+    "status": "paused",
+    "runtimeDurationSeconds": 1200,
+    "actualStart": "2026-05-31T10:20:00Z",
+    "pausedAt": "2026-05-31T10:28:08Z",
+    "totalPausedDurationSeconds": 75,
+    "adjustmentSeconds": 60,
+    "endedRemainingSeconds": null,
+    "actualEnd": null,
+    "pauseCount": 1,
+    "endedReason": "",
+    "remainingSeconds": 717,
+    "hostName": "Alice Johnson",
+    "scheduledStart": "2026-05-31T10:20:00Z",
+    "scheduledEnd": "2026-05-31T10:40:00Z",
+    "expectedDurationMinutes": 20,
+    "position": 4,
+    "location": "Main Hall",
+    "metadata": { "track": "engineering" },
+    "createdAt": "2026-05-31T09:00:00Z",
+    "updatedAt": "2026-05-31T10:28:08Z"
+  },
+  "nextProgramItem": {
+    "id": "pi_def456",
+    "sessionId": "sess_abc123",
+    "title": "Q&A",
+    "type": "q&a",
+    "status": "scheduled",
+    "runtimeDurationSeconds": 600,
+    "totalPausedDurationSeconds": 0,
+    "adjustmentSeconds": 0,
+    "pauseCount": 0,
+    "remainingSeconds": 600,
+    "scheduledStart": "2026-05-31T10:40:00Z",
+    "scheduledEnd": "2026-05-31T10:50:00Z",
+    "expectedDurationMinutes": 10,
+    "position": 5,
+    "createdAt": "2026-05-31T09:00:00Z",
+    "updatedAt": "2026-05-31T09:00:00Z"
+  },
+  "deltaSeconds": 60
+}
+```
+
+Notes:
+
+- type is included on runtime mutations and websocket snapshots.
+- deltaSeconds is only present on adjust-time operations.
+- programItem is the active runtime authority when present.
+- nextProgramItem may be null when no upcoming item exists.
+
+### ProgramItem Runtime Status Values
+
+- scheduled
+- in_progress
+- paused
+- ended
+- canceled
+
+### ProgramItem Runtime Fields
+
+- runtimeDurationSeconds: Base runtime budget for this item.
+- adjustmentSeconds: Net manual adjustment applied to runtime budget.
+- actualStart: Runtime start timestamp.
+- pausedAt: Current pause start timestamp, present only while paused.
+- totalPausedDurationSeconds: Cumulative completed paused duration.
+- endedRemainingSeconds: Frozen remaining time at end.
+- actualEnd: Runtime end timestamp.
+- pauseCount: Number of completed pause intervals.
+- endedReason: End reason label, currently manual.
+- remainingSeconds: Server-computed runtime countdown.
+
+See detailed formulas in docs/programitem-time-calculation.md.
+
+### Runtime Endpoint Summary
+
+- GET /api/v1/sessions/:id returns unified runtime envelope.
+- GET /api/v1/sessions/:id/current-program-item returns current and next ProgramItem snapshots.
+- POST /api/v1/sessions/:id/start returns unified runtime envelope.
+- POST /api/v1/sessions/:id/pause returns unified runtime envelope.
+- POST /api/v1/sessions/:id/resume returns unified runtime envelope.
+- POST /api/v1/sessions/:id/end returns unified runtime envelope.
+- POST /api/v1/sessions/:id/adjust-time returns unified runtime envelope with deltaSeconds.
+- POST /api/v1/program-items/:itemId/start returns unified runtime envelope.
+- POST /api/v1/program-items/:itemId/pause returns unified runtime envelope.
+- POST /api/v1/program-items/:itemId/resume returns unified runtime envelope.
+- POST /api/v1/program-items/:itemId/adjust-time returns unified runtime envelope with deltaSeconds.
+- POST /api/v1/program-items/:itemId/end returns unified runtime envelope.
+
+### WebSocket Snapshot
+
+The websocket connect snapshot and runtime updates now use the same unified runtime envelope shape.
+
 ## Base URL
 
 **Development:** `http://localhost:8080`

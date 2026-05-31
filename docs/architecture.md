@@ -1,5 +1,33 @@
 # Architecture & Design
 
+## Runtime Authority Update (2026-05)
+
+Runtime countdown authority is now split by intent:
+
+- Session remains the container lifecycle and control-token authority.
+- Active ProgramItem is the runtime countdown authority when present.
+- Runtime actions return a unified envelope with session, current programItem, and nextProgramItem.
+
+This removes countdown drift between session controls and agenda controls.
+
+Detailed countdown math by ProgramItem status is documented in docs/programitem-time-calculation.md.
+
+## Session Entity Cleanup Plan
+
+Session cleanup follow-up phase will be after frontend rollout stabilizes on the unified runtime envelope.
+
+Reasoning:
+
+- Session countdown fields are still useful for compatibility during transition.
+- Removing or repurposing them immediately increases frontend migration risk.
+- Once admin and user clients are fully switched, session timer fields can be reduced to container metadata only.
+
+Risk Mitigation:
+
+1. Mark session countdown fields as transitional in API docs.
+2. Remove session countdown mutation coupling that duplicates active ProgramItem runtime state.
+3. Keep only compatibility mirrors where needed for external consumers.
+
 ## System Overview
 
 The Realtime Session Coordination Platform is a three-tier system:
