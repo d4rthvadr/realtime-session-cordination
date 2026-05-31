@@ -7,6 +7,9 @@ import {
   createProgramItem,
   cancelProgramItem,
   startProgramItem,
+  pauseProgramItem,
+  resumeProgramItem,
+  adjustProgramItemTime,
   endProgramItem,
   reorderProgramItems,
   startSession,
@@ -14,7 +17,7 @@ import {
   resumeSession,
   endSession,
   adjustSessionTime,
-  SessionSnapshot,
+  RuntimeSnapshot,
   ProgramItemSnapshot,
   ProgramItemCreateInput,
 } from "@/lib/actions";
@@ -54,7 +57,7 @@ interface BentoSessionViewProps {
 }
 
 export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
-  const [session, setSession] = useState<SessionSnapshot | null>(null);
+  const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [programItems, setProgramItems] = useState<ProgramItemSnapshot[]>([]);
   const [controlToken, setControlToken] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -99,8 +102,8 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
 
       if (sessionResult.error) {
         setLoadError(sessionResult.error);
-      } else if (sessionResult.session) {
-        setSession(sessionResult.session);
+      } else if (sessionResult.runtime) {
+        setRuntime(sessionResult.runtime);
       }
 
       if (programItemsResult.error) {
@@ -111,33 +114,46 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     });
   }, [sessionId]);
 
-  // Auto-decrement time when session is running
+  // Keep runtime countdown smooth between server updates.
   useEffect(() => {
-    if (!session || session.status !== "LIVE") {
+    if (!runtime || runtime.session.status !== "LIVE") {
+      return;
+    }
+
+    if (!runtime.programItem || runtime.programItem.status !== "in_progress") {
       return;
     }
 
     const timer = setInterval(() => {
-      setSession((current) => {
-        if (!current || current.status !== "LIVE") {
+      setRuntime((current) => {
+        if (!current || current.session.status !== "LIVE") {
           return current;
         }
+
+        const currentItem = current.programItem;
+        if (!currentItem || currentItem.status !== "in_progress") {
+          return current;
+        }
+
         return {
           ...current,
-          remainingSeconds: Math.max(0, current.remainingSeconds - 1),
+          programItem: {
+            ...currentItem,
+            remainingSeconds: currentItem.remainingSeconds - 1,
+          },
         };
       });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [session, session?.status]);
+  }, [runtime]);
 
   const viewerLink = useMemo(() => getViewerUrl(sessionId), [sessionId]);
 
   const handleAction = async (
     action: (
       token: string,
-    ) => Promise<{ session: SessionSnapshot | null; error: string | null }>,
+    ) => Promise<{ runtime: RuntimeSnapshot | null; error: string | null }>,
   ) => {
     if (!controlToken) {
       setActionError("No control token available");
@@ -149,12 +165,18 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
       const result = await action(controlToken);
       if (result.error) {
         setActionError(result.error);
-      } else if (result.session) {
-        setSession(result.session);
+      } else if (result.runtime) {
+        setRuntime(result.runtime);
+
+        const listResult = await getProgramItems(sessionId);
+        if (!listResult.error) {
+          setProgramItems(listResult.programItems);
+        }
       }
     });
   };
 
+  const session = runtime?.session ?? null;
   const canStart = session?.status === "CREATED";
   const canPause = session?.status === "LIVE";
   const canResume = session?.status === "PAUSED";
@@ -219,11 +241,14 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
         setProgramItemError(result.error);
         return;
       }
-      const programItem = result.programItem;
-      if (programItem) {
-        setProgramItems((current) =>
-          current.map((item) => (item.id === itemId ? programItem : item)),
-        );
+
+      if (result.runtime) {
+        setRuntime(result.runtime);
+      }
+
+      const listResult = await getProgramItems(sessionId);
+      if (!listResult.error) {
+        setProgramItems(listResult.programItems);
       }
     });
   };
@@ -241,11 +266,96 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
         setProgramItemError(result.error);
         return;
       }
-      const programItem = result.programItem;
-      if (programItem) {
-        setProgramItems((current) =>
-          current.map((item) => (item.id === itemId ? programItem : item)),
-        );
+
+      if (result.runtime) {
+        setRuntime(result.runtime);
+      }
+
+      const listResult = await getProgramItems(sessionId);
+      if (!listResult.error) {
+        setProgramItems(listResult.programItems);
+      }
+    });
+  };
+
+  const handlePauseProgramItem = (itemId: string) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await pauseProgramItem(itemId, controlToken);
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+
+      if (result.runtime) {
+        setRuntime(result.runtime);
+      }
+
+      const listResult = await getProgramItems(sessionId);
+      if (!listResult.error) {
+        setProgramItems(listResult.programItems);
+      }
+    });
+  };
+
+  const handleResumeProgramItem = (itemId: string) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await resumeProgramItem(itemId, controlToken);
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+
+      if (result.runtime) {
+        setRuntime(result.runtime);
+      }
+
+      const listResult = await getProgramItems(sessionId);
+      if (!listResult.error) {
+        setProgramItems(listResult.programItems);
+      }
+    });
+  };
+
+  const handleAdjustProgramItemTime = (
+    itemId: string,
+    deltaSeconds: number,
+  ) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await adjustProgramItemTime(
+        itemId,
+        { deltaSeconds },
+        controlToken,
+      );
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+
+      if (result.runtime) {
+        setRuntime(result.runtime);
+      }
+
+      const listResult = await getProgramItems(sessionId);
+      if (!listResult.error) {
+        setProgramItems(listResult.programItems);
       }
     });
   };
@@ -316,7 +426,7 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     );
   }
 
-  if (!session) {
+  if (!runtime || !session) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
@@ -327,12 +437,21 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     );
   }
 
-  const currentTime = formatClock(session.remainingSeconds, "00:00");
-  const totalTime = formatClock(session.durationSeconds, "00:00");
+  const currentCountdownSeconds = runtime.programItem
+    ? runtime.programItem.remainingSeconds
+    : 0;
+  const totalCountdownSeconds = runtime.programItem
+    ? runtime.programItem.runtimeDurationSeconds +
+      runtime.programItem.adjustmentSeconds
+    : 0;
+  const currentTime = formatClock(currentCountdownSeconds, "00:00");
+  const totalTime = formatClock(totalCountdownSeconds, "00:00");
   const progress =
-    ((session.durationSeconds - session.remainingSeconds) /
-      session.durationSeconds) *
-    100;
+    totalCountdownSeconds > 0
+      ? ((totalCountdownSeconds - currentCountdownSeconds) /
+          totalCountdownSeconds) *
+        100
+      : 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -521,7 +640,10 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
             onCreateAction={handleCreateProgramItem}
             onCancelAction={handleCancelProgramItem}
             onStartAction={handleStartProgramItem}
+            onPauseAction={handlePauseProgramItem}
+            onResumeAction={handleResumeProgramItem}
             onEndAction={handleEndProgramItem}
+            onAdjustTimeAction={handleAdjustProgramItemTime}
             onReorderAction={handleReorderProgramItems}
             runtimeEnabled={isProgramItemRuntimeAllowed}
           />

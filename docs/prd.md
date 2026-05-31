@@ -5,6 +5,7 @@
 A lightweight realtime platform that helps speakers, moderators, and audiences stay synchronized around allocated presentation time through a shared public countdown experience.
 
 The system provides:
+
 - A host-controlled session timer
 - Public synchronized countdown pages
 - Realtime updates across all connected viewers
@@ -17,18 +18,21 @@ The long-term vision is to evolve into a realtime presentation coordination plat
 # Problem Statement
 
 Speakers and lecturers frequently exceed their allocated speaking time due to:
+
 - lack of visible pacing
 - poor time awareness during presentations
 - absence of synchronized timing tools
 - manual moderation inefficiencies
 
 Current approaches are fragmented:
+
 - personal phone timers
 - moderator interventions
 - projected clocks
 - verbal interruptions
 
 These methods create:
+
 - audience frustration
 - schedule overruns
 - operational inefficiency
@@ -76,6 +80,7 @@ The following are intentionally excluded from MVP scope:
 ## Organizers / Hosts
 
 Users who:
+
 - create sessions
 - control timers
 - manage presentation timing
@@ -117,6 +122,7 @@ Users viewing the public countdown page.
 ### Session Creation
 
 Host can:
+
 - create a session
 - define title
 - define speaker name
@@ -125,12 +131,14 @@ Host can:
 ### Public Share Link
 
 Each session generates:
+
 - unique public URL
 - viewer-accessible realtime page
 
 ### Host Controls
 
 Host can:
+
 - start timer
 - pause timer
 - resume timer
@@ -144,6 +152,7 @@ All connected viewers receive synchronized updates through WebSockets.
 ### Countdown Experience
 
 Viewer page displays:
+
 - session title
 - speaker name
 - remaining time
@@ -153,6 +162,7 @@ Viewer page displays:
 ### Visual States
 
 Timer colors:
+
 - Green → safe
 - Yellow → warning
 - Red → critical
@@ -165,6 +175,7 @@ Timer colors:
 ## Session Lifecycle
 
 States:
+
 - CREATED
 - LIVE
 - PAUSED
@@ -185,6 +196,7 @@ PAUSED → ENDED
 ## Server Authoritative Time
 
 The backend owns:
+
 - session start time
 - pause durations
 - remaining time calculations
@@ -194,6 +206,7 @@ Clients must not independently own timer truth.
 ## Synchronization Strategy
 
 The server sends:
+
 - start timestamps
 - duration
 - pause state
@@ -204,6 +217,7 @@ Clients compute remaining time locally and periodically reconcile with server st
 ## Reconnection Behavior
 
 On reconnect:
+
 - client requests latest session state
 - timer rehydrates automatically
 
@@ -214,12 +228,14 @@ On reconnect:
 ## Frontend
 
 ### Recommended Stack
+
 - Next.js
 - React
 - Tailwind CSS
 - Zustand
 
 ### Responsibilities
+
 - render countdown
 - websocket connection
 - fullscreen timer UI
@@ -230,11 +246,13 @@ On reconnect:
 ## Backend
 
 ### Recommended Stack
+
 - Go
 - Gin or Fiber
 - Gorilla WebSocket
 
 ### Responsibilities
+
 - session management
 - websocket broadcasting
 - authoritative timing calculations
@@ -245,6 +263,7 @@ On reconnect:
 ## Database
 
 ### MVP Recommendation
+
 PostgreSQL or SQLite.
 
 Persistent storage requirements are minimal for MVP.
@@ -262,9 +281,6 @@ Persistent storage requirements are minimal for MVP.
   "speakerName": "string",
   "durationSeconds": 1800,
   "status": "CREATED | LIVE | PAUSED | ENDED",
-  "startedAt": "timestamp",
-  "pausedAt": "timestamp",
-  "totalPausedDurationSeconds": 0,
   "createdAt": "timestamp"
 }
 ```
@@ -280,6 +296,7 @@ POST /sessions
 ```
 
 Request:
+
 ```json
 {
   "title": "Kubernetes Workshop",
@@ -337,6 +354,7 @@ POST /sessions/:id/adjust-time
 ```
 
 Request:
+
 ```json
 {
   "deltaSeconds": 120
@@ -360,7 +378,10 @@ GET /ws/sessions/:id
 ```json
 {
   "type": "SESSION_STARTED",
-  "startedAt": 1710000000
+  "session": {
+    "id": "sess_abc123",
+    "status": "LIVE"
+  }
 }
 ```
 
@@ -404,6 +425,7 @@ GET /ws/sessions/:id
 ## Countdown Display
 
 Must:
+
 - be large and readable
 - support fullscreen mode
 - remain visible from distance
@@ -411,6 +433,7 @@ Must:
 ## Accessibility
 
 Should:
+
 - maintain high contrast
 - support responsive layouts
 - avoid relying only on color cues
@@ -428,6 +451,7 @@ Should:
 ## Scalability
 
 MVP target:
+
 - 1,000 concurrent viewers per session
 
 ---
@@ -441,8 +465,9 @@ Viewer links are public.
 ## Host Control Protection
 
 Host control endpoints require:
+
 - signed control token
-or
+  or
 - secret session management link
 
 ---
@@ -450,6 +475,7 @@ or
 # MVP Constraints
 
 To maintain focus:
+
 - single host per session
 - single active speaker
 - no account system
@@ -513,6 +539,7 @@ To maintain focus:
 # Recommended Architecture Direction
 
 The system should follow:
+
 - stateless backend nodes
 - websocket-based realtime synchronization
 - server-authoritative timing
@@ -528,6 +555,7 @@ The MVP focuses on solving a narrow but meaningful operational problem:
 keeping speakers and audiences synchronized around time.
 
 The system intentionally prioritizes:
+
 - simplicity
 - realtime reliability
 - synchronization accuracy

@@ -37,11 +37,14 @@ export interface SessionSnapshot {
   durationSeconds: number;
   status: string;
   createdAt: string;
-  remainingSeconds: number;
-  startedAt?: string;
-  pausedAt?: string;
-  totalPausedDurationSeconds: number;
 }
+
+export type ProgramItemStatus =
+  | "scheduled"
+  | "in_progress"
+  | "paused"
+  | "ended"
+  | "canceled";
 
 export interface CreateSessionInput {
   name: string;
@@ -57,7 +60,17 @@ export interface ProgramItemSnapshot {
   sessionId: string;
   title: string;
   type: string;
-  status: "scheduled" | "in_progress" | "ended" | "canceled";
+  status: ProgramItemStatus;
+  runtimeDurationSeconds: number;
+  remainingSeconds: number;
+  actualStart?: string;
+  pausedAt?: string;
+  totalPausedDurationSeconds: number;
+  adjustmentSeconds: number;
+  endedRemainingSeconds?: number;
+  actualEnd?: string;
+  pauseCount: number;
+  endedReason?: string;
   hostName?: string;
   scheduledStart: string;
   scheduledEnd: string;
@@ -84,7 +97,7 @@ export interface ProgramItemCreateInput {
 export interface ProgramItemUpdateInput {
   title?: string;
   type?: string;
-  status?: "scheduled" | "in_progress" | "ended" | "canceled";
+  status?: "scheduled" | "in_progress" | "paused" | "ended" | "canceled";
   hostName?: string;
   scheduledStart?: string;
   scheduledEnd?: string;
@@ -92,6 +105,37 @@ export interface ProgramItemUpdateInput {
   position?: number;
   location?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface RuntimeSnapshot {
+  type?: string;
+  session: SessionSnapshot;
+  programItem: ProgramItemSnapshot | null;
+  nextProgramItem: ProgramItemSnapshot | null;
+  deltaSeconds?: number;
+}
+
+function runtimeResult(runtime: RuntimeSnapshot | null, error: string | null) {
+  return {
+    runtime,
+    session: runtime?.session ?? null,
+    error,
+  };
+}
+
+function normalizeRuntimePayload(data: any): RuntimeSnapshot {
+  const programItem = (data?.programItem ?? null) as ProgramItemSnapshot | null;
+  const nextProgramItem = (data?.nextProgramItem ??
+    null) as ProgramItemSnapshot | null;
+
+  return {
+    type: data?.type,
+    session: data?.session as SessionSnapshot,
+    programItem,
+    nextProgramItem,
+    deltaSeconds:
+      typeof data?.deltaSeconds === "number" ? data.deltaSeconds : undefined,
+  };
 }
 
 export interface ProgramItemReorderInput {
@@ -146,15 +190,11 @@ export async function getSessionSnapshot(sessionId: string) {
     }
 
     const data = await response.json();
-    return {
-      session: data.session as SessionSnapshot,
-      error: null,
-      message: "Session fetched successfully",
-    };
+    return runtimeResult(normalizeRuntimePayload(data), null);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to fetch session";
-    return { session: null, error: message, message };
+    return runtimeResult(null, message);
   }
 }
 
@@ -212,7 +252,10 @@ export async function startSession(sessionId: string, controlToken: string) {
   try {
     const headers = getProtectedRequestHeaders();
     if (!headers) {
-      return unauthorizedResult({ session: null as SessionSnapshot | null });
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
     }
 
     const response = await fetch(
@@ -227,7 +270,10 @@ export async function startSession(sessionId: string, controlToken: string) {
     );
 
     if (response.status === 401) {
-      return unauthorizedResult({ session: null as SessionSnapshot | null });
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
     }
 
     if (!response.ok) {
@@ -235,11 +281,11 @@ export async function startSession(sessionId: string, controlToken: string) {
     }
 
     const data = await response.json();
-    return { session: data.session as SessionSnapshot, error: null };
+    return runtimeResult(normalizeRuntimePayload(data), null);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to start session";
-    return { session: null, error: message };
+    return runtimeResult(null, message);
   }
 }
 
@@ -248,7 +294,10 @@ export async function pauseSession(sessionId: string, controlToken: string) {
   try {
     const headers = getProtectedRequestHeaders();
     if (!headers) {
-      return unauthorizedResult({ session: null as SessionSnapshot | null });
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
     }
 
     const response = await fetch(
@@ -263,7 +312,10 @@ export async function pauseSession(sessionId: string, controlToken: string) {
     );
 
     if (response.status === 401) {
-      return unauthorizedResult({ session: null as SessionSnapshot | null });
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
     }
 
     if (!response.ok) {
@@ -271,11 +323,11 @@ export async function pauseSession(sessionId: string, controlToken: string) {
     }
 
     const data = await response.json();
-    return { session: data.session as SessionSnapshot, error: null };
+    return runtimeResult(normalizeRuntimePayload(data), null);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to pause session";
-    return { session: null, error: message };
+    return runtimeResult(null, message);
   }
 }
 
@@ -284,7 +336,10 @@ export async function resumeSession(sessionId: string, controlToken: string) {
   try {
     const headers = getProtectedRequestHeaders();
     if (!headers) {
-      return unauthorizedResult({ session: null as SessionSnapshot | null });
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
     }
 
     const response = await fetch(
@@ -299,7 +354,10 @@ export async function resumeSession(sessionId: string, controlToken: string) {
     );
 
     if (response.status === 401) {
-      return unauthorizedResult({ session: null as SessionSnapshot | null });
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
     }
 
     if (!response.ok) {
@@ -307,11 +365,11 @@ export async function resumeSession(sessionId: string, controlToken: string) {
     }
 
     const data = await response.json();
-    return { session: data.session as SessionSnapshot, error: null };
+    return runtimeResult(normalizeRuntimePayload(data), null);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to resume session";
-    return { session: null, error: message };
+    return runtimeResult(null, message);
   }
 }
 
@@ -320,7 +378,10 @@ export async function endSession(sessionId: string, controlToken: string) {
   try {
     const headers = getProtectedRequestHeaders();
     if (!headers) {
-      return unauthorizedResult({ session: null as SessionSnapshot | null });
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
     }
 
     const response = await fetch(
@@ -335,7 +396,10 @@ export async function endSession(sessionId: string, controlToken: string) {
     );
 
     if (response.status === 401) {
-      return unauthorizedResult({ session: null as SessionSnapshot | null });
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
     }
 
     if (!response.ok) {
@@ -343,11 +407,11 @@ export async function endSession(sessionId: string, controlToken: string) {
     }
 
     const data = await response.json();
-    return { session: data.session as SessionSnapshot, error: null };
+    return runtimeResult(normalizeRuntimePayload(data), null);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to end session";
-    return { session: null, error: message };
+    return runtimeResult(null, message);
   }
 }
 
@@ -360,7 +424,10 @@ export async function adjustSessionTime(
   try {
     const headers = getProtectedRequestHeaders();
     if (!headers) {
-      return unauthorizedResult({ session: null as SessionSnapshot | null });
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
     }
 
     const response = await fetch(
@@ -376,7 +443,10 @@ export async function adjustSessionTime(
     );
 
     if (response.status === 401) {
-      return unauthorizedResult({ session: null as SessionSnapshot | null });
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
     }
 
     if (!response.ok) {
@@ -384,11 +454,11 @@ export async function adjustSessionTime(
     }
 
     const data = await response.json();
-    return { session: data.session as SessionSnapshot, error: null };
+    return runtimeResult(normalizeRuntimePayload(data), null);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to adjust time";
-    return { session: null, error: message };
+    return runtimeResult(null, message);
   }
 }
 
@@ -574,7 +644,8 @@ export async function startProgramItem(itemId: string, controlToken: string) {
     const headers = getProtectedRequestHeaders();
     if (!headers) {
       return unauthorizedResult({
-        programItem: null as ProgramItemSnapshot | null,
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
       });
     }
 
@@ -591,7 +662,8 @@ export async function startProgramItem(itemId: string, controlToken: string) {
 
     if (response.status === 401) {
       return unauthorizedResult({
-        programItem: null as ProgramItemSnapshot | null,
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
       });
     }
 
@@ -600,14 +672,146 @@ export async function startProgramItem(itemId: string, controlToken: string) {
     }
 
     const data = await response.json();
-    return {
-      programItem: data.programItem as ProgramItemSnapshot,
-      error: null,
-    };
+    return runtimeResult(normalizeRuntimePayload(data), null);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to start program item";
-    return { programItem: null as ProgramItemSnapshot | null, error: message };
+    return runtimeResult(null, message);
+  }
+}
+
+// POST /api/v1/program-items/:itemId/pause - Pause program item
+export async function pauseProgramItem(itemId: string, controlToken: string) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/program-items/${itemId}/pause`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "X-Control-Token": controlToken,
+        },
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to pause program item: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return runtimeResult(normalizeRuntimePayload(data), null);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to pause program item";
+    return runtimeResult(null, message);
+  }
+}
+
+// POST /api/v1/program-items/:itemId/resume - Resume program item
+export async function resumeProgramItem(itemId: string, controlToken: string) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/program-items/${itemId}/resume`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "X-Control-Token": controlToken,
+        },
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to resume program item: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return runtimeResult(normalizeRuntimePayload(data), null);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to resume program item";
+    return runtimeResult(null, message);
+  }
+}
+
+// POST /api/v1/program-items/:itemId/adjust-time - Adjust program item time
+export async function adjustProgramItemTime(
+  itemId: string,
+  input: AdjustTimeInput,
+  controlToken: string,
+) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/program-items/${itemId}/adjust-time`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "X-Control-Token": controlToken,
+        },
+        body: JSON.stringify(input),
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to adjust program item time: ${response.statusText}`,
+      );
+    }
+
+    const data = await response.json();
+    return runtimeResult(normalizeRuntimePayload(data), null);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to adjust program item time";
+    return runtimeResult(null, message);
   }
 }
 
@@ -617,7 +821,8 @@ export async function endProgramItem(itemId: string, controlToken: string) {
     const headers = getProtectedRequestHeaders();
     if (!headers) {
       return unauthorizedResult({
-        programItem: null as ProgramItemSnapshot | null,
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
       });
     }
 
@@ -634,7 +839,8 @@ export async function endProgramItem(itemId: string, controlToken: string) {
 
     if (response.status === 401) {
       return unauthorizedResult({
-        programItem: null as ProgramItemSnapshot | null,
+        runtime: null as RuntimeSnapshot | null,
+        session: null as SessionSnapshot | null,
       });
     }
 
@@ -643,14 +849,11 @@ export async function endProgramItem(itemId: string, controlToken: string) {
     }
 
     const data = await response.json();
-    return {
-      programItem: data.programItem as ProgramItemSnapshot,
-      error: null,
-    };
+    return runtimeResult(normalizeRuntimePayload(data), null);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to end program item";
-    return { programItem: null as ProgramItemSnapshot | null, error: message };
+    return runtimeResult(null, message);
   }
 }
 

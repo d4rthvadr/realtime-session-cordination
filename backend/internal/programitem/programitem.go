@@ -13,6 +13,7 @@ const (
 	// Program item lifecycle states.
 	StatusScheduled  = "scheduled"
 	StatusInProgress = "in_progress"
+	StatusPaused     = "paused"
 	StatusEnded      = "ended"
 	StatusCanceled   = "canceled"
 
@@ -47,41 +48,56 @@ var allowedTypes = map[string]struct{}{
 }
 
 type ProgramItem struct {
-	ID                      string
-	SessionID               string
-	Title                   string
-	Type                    string
-	Status                  string
-	ActualStart             *time.Time
-	ActualEnd               *time.Time
-	HostName                string
-	ScheduledStart          time.Time
-	ScheduledEnd            time.Time
-	ExpectedDurationMinutes int
-	Position                int
-	Location                string
-	Metadata                map[string]any
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
+	ID                         string
+	SessionID                  string
+	Title                      string
+	Type                       string
+	Status                     string
+	RuntimeDurationSeconds     int
+	ActualStart                *time.Time
+	PausedAt                   *time.Time
+	TotalPausedDurationSeconds int
+	AdjustmentSeconds          int
+	EndedRemainingSeconds      *int
+	ActualEnd                  *time.Time
+	PauseCount                 int
+	EndedReason                string
+	HostName                   string
+	ScheduledStart             time.Time
+	ScheduledEnd               time.Time
+	ExpectedDurationMinutes    int
+	Position                   int
+	Location                   string
+	Metadata                   map[string]any
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
 }
 
 type Snapshot struct {
-	ID                      string         `json:"id"`
-	SessionID               string         `json:"sessionId"`
-	Title                   string         `json:"title"`
-	Type                    string         `json:"type"`
-	Status                  string         `json:"status"`
-	ActualStart             *time.Time     `json:"actualStart,omitempty"`
-	ActualEnd               *time.Time     `json:"actualEnd,omitempty"`
-	HostName                string         `json:"hostName,omitempty"`
-	ScheduledStart          time.Time      `json:"scheduledStart"`
-	ScheduledEnd            time.Time      `json:"scheduledEnd"`
-	ExpectedDurationMinutes int            `json:"expectedDurationMinutes"`
-	Position                int            `json:"position"`
-	Location                string         `json:"location,omitempty"`
-	Metadata                map[string]any `json:"metadata,omitempty"`
-	CreatedAt               time.Time      `json:"createdAt"`
-	UpdatedAt               time.Time      `json:"updatedAt"`
+	ID                         string         `json:"id"`
+	SessionID                  string         `json:"sessionId"`
+	Title                      string         `json:"title"`
+	Type                       string         `json:"type"`
+	Status                     string         `json:"status"`
+	RuntimeDurationSeconds     int            `json:"runtimeDurationSeconds"`
+	ActualStart                *time.Time     `json:"actualStart,omitempty"`
+	PausedAt                   *time.Time     `json:"pausedAt,omitempty"`
+	TotalPausedDurationSeconds int            `json:"totalPausedDurationSeconds"`
+	AdjustmentSeconds          int            `json:"adjustmentSeconds"`
+	EndedRemainingSeconds      *int           `json:"endedRemainingSeconds,omitempty"`
+	ActualEnd                  *time.Time     `json:"actualEnd,omitempty"`
+	PauseCount                 int            `json:"pauseCount"`
+	EndedReason                string         `json:"endedReason,omitempty"`
+	HostName                   string         `json:"hostName,omitempty"`
+	ScheduledStart             time.Time      `json:"scheduledStart"`
+	ScheduledEnd               time.Time      `json:"scheduledEnd"`
+	ExpectedDurationMinutes    int            `json:"expectedDurationMinutes"`
+	Position                   int            `json:"position"`
+	Location                   string         `json:"location,omitempty"`
+	Metadata                   map[string]any `json:"metadata,omitempty"`
+	CreatedAt                  time.Time      `json:"createdAt"`
+	UpdatedAt                  time.Time      `json:"updatedAt"`
+	RemainingSeconds           int            `json:"remainingSeconds"`
 }
 
 type CreateInput struct {
@@ -117,11 +133,11 @@ type ReorderItem struct {
 
 // Event is the websocket payload emitted when a ProgramItem changes.
 type Event struct {
-	Type         string     `json:"type"`
-	SessionID    string     `json:"sessionId,omitempty"`
-	ProgramItem  *Snapshot  `json:"programItem,omitempty"`
-	NextProgramItem *Snapshot `json:"nextProgramItem,omitempty"`
-	ProgramItems []Snapshot `json:"programItems,omitempty"`
+	Type            string     `json:"type"`
+	SessionID       string     `json:"sessionId,omitempty"`
+	ProgramItem     *Snapshot  `json:"programItem,omitempty"`
+	NextProgramItem *Snapshot  `json:"nextProgramItem,omitempty"`
+	ProgramItems    []Snapshot `json:"programItems,omitempty"`
 }
 
 type Manager struct {
@@ -170,6 +186,7 @@ func (m *Manager) Create(input CreateInput) (Snapshot, error) {
 		Title:                   input.Title,
 		Type:                    input.Type,
 		Status:                  StatusScheduled,
+		RuntimeDurationSeconds:  input.ExpectedDurationMinutes * 60,
 		HostName:                input.HostName,
 		ScheduledStart:          input.ScheduledStart.UTC(),
 		ScheduledEnd:            input.ScheduledEnd.UTC(),
@@ -183,6 +200,9 @@ func (m *Manager) Create(input CreateInput) (Snapshot, error) {
 
 	if item.ExpectedDurationMinutes <= 0 {
 		item.ExpectedDurationMinutes = int(item.ScheduledEnd.Sub(item.ScheduledStart).Minutes())
+	}
+	if item.RuntimeDurationSeconds <= 0 {
+		item.RuntimeDurationSeconds = int(item.ScheduledEnd.Sub(item.ScheduledStart).Seconds())
 	}
 
 	created, err := m.store.Create(item)
@@ -242,7 +262,7 @@ func (m *Manager) CurrentAndNextSnapshots(sessionID string, at time.Time) (*Snap
 
 	var current *ProgramItem
 	for _, item := range sorted {
-		if item.Status == StatusInProgress {
+		if item.Status == StatusInProgress || item.Status == StatusPaused {
 			current = item
 			break
 		}
@@ -414,12 +434,51 @@ func (m *Manager) Start(id string) (Snapshot, error) {
 	return buildSnapshot(item), nil
 }
 
+func (m *Manager) Pause(id string) (Snapshot, error) {
+	now := time.Now().UTC()
+	item, err := m.store.TransitionToPaused(id, now)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	return buildSnapshot(item), nil
+}
+
+func (m *Manager) Resume(id string) (Snapshot, error) {
+	now := time.Now().UTC()
+	item, err := m.store.TransitionToResumed(id, now)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	return buildSnapshot(item), nil
+}
+
+func (m *Manager) AdjustTime(id string, deltaSeconds int) (Snapshot, error) {
+	now := time.Now().UTC()
+	item, err := m.store.AdjustRuntime(id, deltaSeconds, now)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	return buildSnapshot(item), nil
+}
+
 func (m *Manager) End(id string) (Snapshot, error) {
 	now := time.Now().UTC()
+	current, err := m.store.Get(id)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if current.Status != StatusInProgress && current.Status != StatusPaused {
+		return Snapshot{}, ErrInvalidStatusTransition
+	}
+	remaining := computeRemainingSeconds(current, now)
 	item, err := m.store.TransitionToEnded(id, now)
 	if err != nil {
 		return Snapshot{}, err
 	}
+	item.EndedRemainingSeconds = &remaining
 
 	return buildSnapshot(item), nil
 }
@@ -450,23 +509,64 @@ func (m *Manager) Reorder(sessionID string, items []ReorderItem) ([]Snapshot, er
 }
 
 func buildSnapshot(item *ProgramItem) Snapshot {
+	now := time.Now().UTC()
 	return Snapshot{
-		ID:                      item.ID,
-		SessionID:               item.SessionID,
-		Title:                   item.Title,
-		Type:                    item.Type,
-		Status:                  item.Status,
-		ActualStart:             item.ActualStart,
-		ActualEnd:               item.ActualEnd,
-		HostName:                item.HostName,
-		ScheduledStart:          item.ScheduledStart,
-		ScheduledEnd:            item.ScheduledEnd,
-		ExpectedDurationMinutes: item.ExpectedDurationMinutes,
-		Position:                item.Position,
-		Location:                item.Location,
-		Metadata:                cloneMetadata(item.Metadata),
-		CreatedAt:               item.CreatedAt,
-		UpdatedAt:               item.UpdatedAt,
+		ID:                         item.ID,
+		SessionID:                  item.SessionID,
+		Title:                      item.Title,
+		Type:                       item.Type,
+		Status:                     item.Status,
+		RuntimeDurationSeconds:     item.RuntimeDurationSeconds,
+		ActualStart:                item.ActualStart,
+		PausedAt:                   item.PausedAt,
+		TotalPausedDurationSeconds: item.TotalPausedDurationSeconds,
+		AdjustmentSeconds:          item.AdjustmentSeconds,
+		EndedRemainingSeconds:      item.EndedRemainingSeconds,
+		ActualEnd:                  item.ActualEnd,
+		PauseCount:                 item.PauseCount,
+		EndedReason:                item.EndedReason,
+		HostName:                   item.HostName,
+		ScheduledStart:             item.ScheduledStart,
+		ScheduledEnd:               item.ScheduledEnd,
+		ExpectedDurationMinutes:    item.ExpectedDurationMinutes,
+		Position:                   item.Position,
+		Location:                   item.Location,
+		Metadata:                   cloneMetadata(item.Metadata),
+		CreatedAt:                  item.CreatedAt,
+		UpdatedAt:                  item.UpdatedAt,
+		RemainingSeconds:           computeRemainingSeconds(item, now),
+	}
+}
+
+func computeRemainingSeconds(item *ProgramItem, at time.Time) int {
+	base := item.RuntimeDurationSeconds + item.AdjustmentSeconds
+
+	switch item.Status {
+	case StatusScheduled:
+		return base
+	case StatusInProgress:
+		if item.ActualStart == nil {
+			return base
+		}
+		elapsed := int(at.Sub(*item.ActualStart).Seconds()) - item.TotalPausedDurationSeconds
+		return base - elapsed
+	case StatusPaused:
+		if item.ActualStart == nil || item.PausedAt == nil {
+			return base
+		}
+		elapsed := int(item.PausedAt.Sub(*item.ActualStart).Seconds()) - item.TotalPausedDurationSeconds
+		return base - elapsed
+	case StatusEnded:
+		if item.EndedRemainingSeconds != nil {
+			return *item.EndedRemainingSeconds
+		}
+		if item.ActualEnd == nil || item.ActualStart == nil {
+			return base
+		}
+		elapsed := int(item.ActualEnd.Sub(*item.ActualStart).Seconds()) - item.TotalPausedDurationSeconds
+		return base - elapsed
+	default:
+		return base
 	}
 }
 

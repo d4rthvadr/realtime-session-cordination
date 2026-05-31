@@ -11,7 +11,7 @@ import {
   resumeSession,
   endSession,
   adjustSessionTime,
-  SessionSnapshot,
+  RuntimeSnapshot,
 } from "@/lib/actions";
 
 interface HostControlPanelProps {
@@ -19,13 +19,12 @@ interface HostControlPanelProps {
 }
 
 export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
-  const [session, setSession] = useState<SessionSnapshot | null>(null);
+  const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [controlToken, setControlToken] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  // Load initial session and control token
   useEffect(() => {
     const token = window.sessionStorage.getItem(`controlToken:${sessionId}`);
     setControlToken(token);
@@ -34,39 +33,53 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
       const result = await getSessionSnapshot(sessionId);
       if (result.error) {
         setLoadError(result.error);
-      } else if (result.session) {
-        setSession(result.session);
+      } else if (result.runtime) {
+        setRuntime(result.runtime);
       }
     });
   }, [sessionId]);
 
-  // Auto-decrement time when session is running
+  // Keep local countdown smooth between server updates.
   useEffect(() => {
-    if (!session || session.status !== "LIVE") {
+    if (!runtime || runtime.session.status !== "LIVE") {
+      return;
+    }
+
+    if (!runtime.programItem || runtime.programItem.status !== "in_progress") {
       return;
     }
 
     const timer = setInterval(() => {
-      setSession((current) => {
-        if (!current || current.status !== "LIVE") {
+      setRuntime((current) => {
+        if (!current || current.session.status !== "LIVE") {
           return current;
         }
+
+        const currentItem = current.programItem;
+        if (!currentItem || currentItem.status !== "in_progress") {
+          return current;
+        }
+
         return {
           ...current,
-          remainingSeconds: Math.max(0, current.remainingSeconds - 1),
+          programItem: {
+            ...currentItem,
+            remainingSeconds: currentItem.remainingSeconds - 1,
+          },
         };
       });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [session, session?.status]);
+  }, [runtime]);
 
   const viewerLink = useMemo(() => getViewerUrl(sessionId), [sessionId]);
 
   const handleAction = async (
-    action: (
-      token: string,
-    ) => Promise<{ session: SessionSnapshot | null; error: string | null }>,
+    action: (token: string) => Promise<{
+      runtime: RuntimeSnapshot | null;
+      error: string | null;
+    }>,
   ) => {
     if (!controlToken) {
       setActionError("No control token available");
@@ -78,13 +91,13 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
       const result = await action(controlToken);
       if (result.error) {
         setActionError(result.error);
-      } else if (result.session) {
-        setSession(result.session);
+      } else if (result.runtime) {
+        setRuntime(result.runtime);
       }
     });
   };
 
-  if (!session) {
+  if (!runtime) {
     if (loadError) {
       return <EmptyState title="Session Not Found" description={loadError} />;
     }
@@ -95,6 +108,11 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
       />
     );
   }
+
+  const session = runtime.session;
+  const displayRemainingSeconds = runtime.programItem
+    ? runtime.programItem.remainingSeconds
+    : 0;
 
   const canStart = session.status === "CREATED";
   const canPause = session.status === "LIVE";
@@ -117,7 +135,7 @@ export default function HostControlPanel({ sessionId }: HostControlPanelProps) {
         </p>
         <p className="mt-2 text-sm text-slate-500">Time Remaining</p>
         <p className="text-3xl font-bold text-slate-900">
-          {formatClock(session.remainingSeconds, "--:--")}
+          {formatClock(displayRemainingSeconds, "--:--")}
         </p>
       </div>
 

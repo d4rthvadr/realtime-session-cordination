@@ -36,6 +36,14 @@ type runtimeSessionLock struct {
 	refs int
 }
 
+type runtimeEnvelope struct {
+	Type            string                `json:"type,omitempty"`
+	Session         session.Snapshot      `json:"session"`
+	ProgramItem     *programitem.Snapshot `json:"programItem,omitempty"`
+	NextProgramItem *programitem.Snapshot `json:"nextProgramItem,omitempty"`
+	DeltaSeconds    int                   `json:"deltaSeconds,omitempty"`
+}
+
 func NewHandler(manager *session.Manager, programItemManager *programitem.Manager, hub *ws.Hub, authService *auth.Service, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = logging.Default()
@@ -66,6 +74,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 
 		protected := apiV1.Group("")
 		protected.Use(h.requireAuth())
+		// Session routes
 		protected.POST("/sessions", h.createSession)
 		protected.GET("/sessions", h.listSessions)
 		protected.GET("/sessions/:id/program-items", h.listProgramItems)
@@ -76,11 +85,16 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		protected.POST("/sessions/:id/resume", h.resumeSession)
 		protected.POST("/sessions/:id/end", h.endSession)
 		protected.POST("/sessions/:id/adjust-time", h.adjustTime)
+		// Program item routes
 		protected.PATCH("/program-items/:itemId", h.updateProgramItem)
 		protected.POST("/program-items/:itemId/cancel", h.cancelProgramItem)
 		protected.POST("/program-items/:itemId/start", h.startProgramItem)
+		protected.POST("/program-items/:itemId/pause", h.pauseProgramItem)
+		protected.POST("/program-items/:itemId/resume", h.resumeProgramItem)
+		protected.POST("/program-items/:itemId/adjust-time", h.adjustProgramItemTime)
 		protected.POST("/program-items/:itemId/end", h.endProgramItem)
 
+		// Public routes
 		apiV1.GET("/sessions/:id", h.getSession)
 		apiV1.GET("/sessions/:id/current-program-item", h.getCurrentProgramItem)
 	}
@@ -127,12 +141,16 @@ func (h *Handler) createSession(c *gin.Context) {
 }
 
 func (h *Handler) getSession(c *gin.Context) {
-	snap, err := h.manager.GetSnapshot(c.Param("id"))
+	envelope, err := h.buildRuntimeEnvelope(c.Param("id"))
 	if err != nil {
-		h.writeDomainErr(c, err)
+		if errors.Is(err, session.ErrNotFound) {
+			h.writeDomainErr(c, err)
+			return
+		}
+		h.writeProgramItemErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"session": snap})
+	c.JSON(http.StatusOK, envelope)
 }
 
 func (h *Handler) listSessions(c *gin.Context) {
@@ -346,40 +364,31 @@ func (h *Handler) startProgramItem(c *gin.Context) {
 		return
 	}
 
-	var snap programitem.Snapshot
-	var nextSnap *programitem.Snapshot
+	var event runtimeEnvelope
 	h.withSessionRuntimeLock(item.SessionID, func() {
 		if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
 			return
 		}
 
-		startedSnap, startErr := h.programItemManager.Start(itemID)
-		if startErr != nil {
+		if _, startErr := h.programItemManager.Start(itemID); startErr != nil {
 			h.writeProgramItemErr(c, startErr)
 			return
 		}
 
-		_, derivedNext, nextErr := h.programItemManager.CurrentAndNextSnapshots(item.SessionID, time.Now().UTC())
-		if nextErr != nil {
-			h.writeProgramItemErr(c, nextErr)
+		env, runtimeErr := h.buildRuntimeEnvelope(item.SessionID)
+		if runtimeErr != nil {
+			h.writeProgramItemErr(c, runtimeErr)
 			return
 		}
-
-		snap = startedSnap
-		nextSnap = derivedNext
+		env.Type = programitem.EventStarted
+		event = env
 	})
 	if c.IsAborted() {
 		return
 	}
 
-	h.broadcastProgramItemEvent(item.SessionID, programitem.Event{
-		Type:            programitem.EventStarted,
-		SessionID:       item.SessionID,
-		ProgramItem:     &snap,
-		NextProgramItem: nextSnap,
-	}, c)
-
-	c.JSON(http.StatusOK, gin.H{"programItem": snap, "nextProgramItem": nextSnap})
+	c.JSON(http.StatusOK, event)
+	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
 
 func (h *Handler) endProgramItem(c *gin.Context) {
@@ -398,40 +407,191 @@ func (h *Handler) endProgramItem(c *gin.Context) {
 		return
 	}
 
-	var snap programitem.Snapshot
-	var nextSnap *programitem.Snapshot
+	var event runtimeEnvelope
 	h.withSessionRuntimeLock(item.SessionID, func() {
 		if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
 			return
 		}
 
-		endedSnap, endErr := h.programItemManager.End(itemID)
-		if endErr != nil {
+		if _, endErr := h.programItemManager.End(itemID); endErr != nil {
 			h.writeProgramItemErr(c, endErr)
 			return
 		}
 
-		_, derivedNext, nextErr := h.programItemManager.CurrentAndNextSnapshots(item.SessionID, time.Now().UTC())
-		if nextErr != nil {
-			h.writeProgramItemErr(c, nextErr)
+		env, runtimeErr := h.buildRuntimeEnvelope(item.SessionID)
+		if runtimeErr != nil {
+			h.writeProgramItemErr(c, runtimeErr)
 			return
 		}
-
-		snap = endedSnap
-		nextSnap = derivedNext
+		env.Type = programitem.EventEnded
+		event = env
 	})
 	if c.IsAborted() {
 		return
 	}
 
-	h.broadcastProgramItemEvent(item.SessionID, programitem.Event{
-		Type:            programitem.EventEnded,
-		SessionID:       item.SessionID,
-		ProgramItem:     &snap,
-		NextProgramItem: nextSnap,
-	}, c)
+	c.JSON(http.StatusOK, event)
+	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
+}
 
-	c.JSON(http.StatusOK, gin.H{"programItem": snap, "nextProgramItem": nextSnap})
+func (h *Handler) pauseProgramItem(c *gin.Context) {
+	if h.programItemManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+		return
+	}
+
+	itemID := c.Param("itemId")
+	item, err := h.programItemManager.GetSnapshot(itemID)
+	if err != nil {
+		h.writeProgramItemErr(c, err)
+		return
+	}
+	if !h.authorizeControl(c, item.SessionID) {
+		return
+	}
+
+	var event runtimeEnvelope
+	h.withSessionRuntimeLock(item.SessionID, func() {
+		if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
+			return
+		}
+
+		if _, pauseErr := h.programItemManager.Pause(itemID); pauseErr != nil {
+			h.writeProgramItemErr(c, pauseErr)
+			return
+		}
+
+		sessionSnap, snapErr := h.manager.GetSnapshot(item.SessionID)
+		if snapErr != nil {
+			h.writeDomainErr(c, snapErr)
+			return
+		}
+		if sessionSnap.Status == session.StatusLive {
+			if _, pauseSessionErr := h.manager.Pause(item.SessionID); pauseSessionErr != nil {
+				h.writeDomainErr(c, pauseSessionErr)
+				return
+			}
+		}
+
+		env, runtimeErr := h.buildRuntimeEnvelope(item.SessionID)
+		if runtimeErr != nil {
+			h.writeProgramItemErr(c, runtimeErr)
+			return
+		}
+		env.Type = "PROGRAM_ITEM_PAUSED"
+		event = env
+	})
+	if c.IsAborted() {
+		return
+	}
+
+	c.JSON(http.StatusOK, event)
+	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
+}
+
+func (h *Handler) resumeProgramItem(c *gin.Context) {
+	if h.programItemManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+		return
+	}
+
+	itemID := c.Param("itemId")
+	item, err := h.programItemManager.GetSnapshot(itemID)
+	if err != nil {
+		h.writeProgramItemErr(c, err)
+		return
+	}
+	if !h.authorizeControl(c, item.SessionID) {
+		return
+	}
+
+	var event runtimeEnvelope
+	h.withSessionRuntimeLock(item.SessionID, func() {
+		if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
+			return
+		}
+
+		if _, resumeErr := h.programItemManager.Resume(itemID); resumeErr != nil {
+			h.writeProgramItemErr(c, resumeErr)
+			return
+		}
+
+		sessionSnap, snapErr := h.manager.GetSnapshot(item.SessionID)
+		if snapErr != nil {
+			h.writeDomainErr(c, snapErr)
+			return
+		}
+		if sessionSnap.Status == session.StatusPaused {
+			if _, resumeSessionErr := h.manager.Resume(item.SessionID); resumeSessionErr != nil {
+				h.writeDomainErr(c, resumeSessionErr)
+				return
+			}
+		}
+
+		env, runtimeErr := h.buildRuntimeEnvelope(item.SessionID)
+		if runtimeErr != nil {
+			h.writeProgramItemErr(c, runtimeErr)
+			return
+		}
+		env.Type = "PROGRAM_ITEM_RESUMED"
+		event = env
+	})
+	if c.IsAborted() {
+		return
+	}
+
+	c.JSON(http.StatusOK, event)
+	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
+}
+
+func (h *Handler) adjustProgramItemTime(c *gin.Context) {
+	if h.programItemManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+		return
+	}
+
+	itemID := c.Param("itemId")
+	item, err := h.programItemManager.GetSnapshot(itemID)
+	if err != nil {
+		h.writeProgramItemErr(c, err)
+		return
+	}
+	if !h.authorizeControl(c, item.SessionID) {
+		return
+	}
+
+	var body adjustTimeBody
+	if err = c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	var event runtimeEnvelope
+	h.withSessionRuntimeLock(item.SessionID, func() {
+		if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
+			return
+		}
+
+		if _, adjustErr := h.programItemManager.AdjustTime(itemID, body.DeltaSeconds); adjustErr != nil {
+			h.writeProgramItemErr(c, adjustErr)
+			return
+		}
+
+		env, runtimeErr := h.buildRuntimeEnvelope(item.SessionID)
+		if runtimeErr != nil {
+			h.writeProgramItemErr(c, runtimeErr)
+			return
+		}
+		env.Type = "PROGRAM_ITEM_TIME_ADJUSTED"
+		env.DeltaSeconds = body.DeltaSeconds
+		event = env
+	})
+	if c.IsAborted() {
+		return
+	}
+
+	c.JSON(http.StatusOK, event)
+	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
 
 type reorderProgramItemsBody struct {
@@ -476,20 +636,29 @@ func (h *Handler) startSession(c *gin.Context) {
 		return
 	}
 
-	var event session.Event
+	var eventType string
+	var envelope runtimeEnvelope
 	h.withSessionRuntimeLock(id, func() {
 		startedEvent, err := h.manager.Start(id)
 		if err != nil {
 			h.writeDomainErr(c, err)
 			return
 		}
-		event = startedEvent
+		eventType = startedEvent.Type
+
+		env, runtimeErr := h.buildRuntimeEnvelope(id)
+		if runtimeErr != nil {
+			h.writeProgramItemErr(c, runtimeErr)
+			return
+		}
+		env.Type = eventType
+		envelope = env
 	})
 	if c.IsAborted() {
 		return
 	}
-	c.JSON(http.StatusOK, event)
-	h.hub.BroadcastWithRequestID(id, event, RequestIDFromContext(c))
+	c.JSON(http.StatusOK, envelope)
+	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
 
 func (h *Handler) pauseSession(c *gin.Context) {
@@ -498,20 +667,43 @@ func (h *Handler) pauseSession(c *gin.Context) {
 		return
 	}
 
-	var event session.Event
+	var eventType string
+	var envelope runtimeEnvelope
 	h.withSessionRuntimeLock(id, func() {
 		pausedEvent, err := h.manager.Pause(id)
 		if err != nil {
 			h.writeDomainErr(c, err)
 			return
 		}
-		event = pausedEvent
+		eventType = pausedEvent.Type
+
+		if h.programItemManager != nil {
+			current, _, currentErr := h.programItemManager.CurrentAndNextSnapshots(id, time.Now().UTC())
+			if currentErr != nil {
+				h.writeProgramItemErr(c, currentErr)
+				return
+			}
+			if current != nil && current.Status == programitem.StatusInProgress {
+				if _, pauseErr := h.programItemManager.Pause(current.ID); pauseErr != nil {
+					h.writeProgramItemErr(c, pauseErr)
+					return
+				}
+			}
+		}
+
+		env, runtimeErr := h.buildRuntimeEnvelope(id)
+		if runtimeErr != nil {
+			h.writeProgramItemErr(c, runtimeErr)
+			return
+		}
+		env.Type = eventType
+		envelope = env
 	})
 	if c.IsAborted() {
 		return
 	}
-	c.JSON(http.StatusOK, event)
-	h.hub.BroadcastWithRequestID(id, event, RequestIDFromContext(c))
+	c.JSON(http.StatusOK, envelope)
+	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
 
 func (h *Handler) resumeSession(c *gin.Context) {
@@ -520,20 +712,43 @@ func (h *Handler) resumeSession(c *gin.Context) {
 		return
 	}
 
-	var event session.Event
+	var eventType string
+	var envelope runtimeEnvelope
 	h.withSessionRuntimeLock(id, func() {
 		resumedEvent, err := h.manager.Resume(id)
 		if err != nil {
 			h.writeDomainErr(c, err)
 			return
 		}
-		event = resumedEvent
+		eventType = resumedEvent.Type
+
+		if h.programItemManager != nil {
+			current, _, currentErr := h.programItemManager.CurrentAndNextSnapshots(id, time.Now().UTC())
+			if currentErr != nil {
+				h.writeProgramItemErr(c, currentErr)
+				return
+			}
+			if current != nil && current.Status == programitem.StatusPaused {
+				if _, resumeErr := h.programItemManager.Resume(current.ID); resumeErr != nil {
+					h.writeProgramItemErr(c, resumeErr)
+					return
+				}
+			}
+		}
+
+		env, runtimeErr := h.buildRuntimeEnvelope(id)
+		if runtimeErr != nil {
+			h.writeProgramItemErr(c, runtimeErr)
+			return
+		}
+		env.Type = eventType
+		envelope = env
 	})
 	if c.IsAborted() {
 		return
 	}
-	c.JSON(http.StatusOK, event)
-	h.hub.BroadcastWithRequestID(id, event, RequestIDFromContext(c))
+	c.JSON(http.StatusOK, envelope)
+	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
 
 func (h *Handler) endSession(c *gin.Context) {
@@ -542,20 +757,43 @@ func (h *Handler) endSession(c *gin.Context) {
 		return
 	}
 
-	var event session.Event
+	var eventType string
+	var envelope runtimeEnvelope
 	h.withSessionRuntimeLock(id, func() {
+		if h.programItemManager != nil {
+			current, _, currentErr := h.programItemManager.CurrentAndNextSnapshots(id, time.Now().UTC())
+			if currentErr != nil {
+				h.writeProgramItemErr(c, currentErr)
+				return
+			}
+			if current != nil && (current.Status == programitem.StatusInProgress || current.Status == programitem.StatusPaused) {
+				if _, endErr := h.programItemManager.End(current.ID); endErr != nil {
+					h.writeProgramItemErr(c, endErr)
+					return
+				}
+			}
+		}
+
 		endedEvent, err := h.manager.End(id)
 		if err != nil {
 			h.writeDomainErr(c, err)
 			return
 		}
-		event = endedEvent
+		eventType = endedEvent.Type
+
+		env, runtimeErr := h.buildRuntimeEnvelope(id)
+		if runtimeErr != nil {
+			h.writeProgramItemErr(c, runtimeErr)
+			return
+		}
+		env.Type = eventType
+		envelope = env
 	})
 	if c.IsAborted() {
 		return
 	}
-	c.JSON(http.StatusOK, event)
-	h.hub.BroadcastWithRequestID(id, event, RequestIDFromContext(c))
+	c.JSON(http.StatusOK, envelope)
+	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
 
 type adjustTimeBody struct {
@@ -574,20 +812,55 @@ func (h *Handler) adjustTime(c *gin.Context) {
 		return
 	}
 
-	var event session.Event
+	var eventType string
+	var envelope runtimeEnvelope
 	h.withSessionRuntimeLock(id, func() {
+		if h.programItemManager != nil {
+			current, _, currentErr := h.programItemManager.CurrentAndNextSnapshots(id, time.Now().UTC())
+			if currentErr != nil {
+				h.writeProgramItemErr(c, currentErr)
+				return
+			}
+			if current != nil && (current.Status == programitem.StatusInProgress || current.Status == programitem.StatusPaused) {
+				if _, adjustErr := h.programItemManager.AdjustTime(current.ID, body.DeltaSeconds); adjustErr != nil {
+					h.writeProgramItemErr(c, adjustErr)
+					return
+				}
+
+				env, runtimeErr := h.buildRuntimeEnvelope(id)
+				if runtimeErr != nil {
+					h.writeProgramItemErr(c, runtimeErr)
+					return
+				}
+				env.Type = "TIME_ADJUSTED"
+				env.DeltaSeconds = body.DeltaSeconds
+				envelope = env
+				eventType = env.Type
+				return
+			}
+		}
+
 		adjustedEvent, err := h.manager.AdjustTime(id, body.DeltaSeconds)
 		if err != nil {
 			h.writeDomainErr(c, err)
 			return
 		}
-		event = adjustedEvent
+		eventType = adjustedEvent.Type
+
+		env, runtimeErr := h.buildRuntimeEnvelope(id)
+		if runtimeErr != nil {
+			h.writeProgramItemErr(c, runtimeErr)
+			return
+		}
+		env.Type = eventType
+		env.DeltaSeconds = body.DeltaSeconds
+		envelope = env
 	})
 	if c.IsAborted() {
 		return
 	}
-	c.JSON(http.StatusOK, event)
-	h.hub.BroadcastWithRequestID(id, event, RequestIDFromContext(c))
+	c.JSON(http.StatusOK, envelope)
+	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
 
 func (h *Handler) sessionSocket(c *gin.Context) {
@@ -606,9 +879,10 @@ func (h *Handler) sessionSocket(c *gin.Context) {
 	h.hub.Register(sessionID, conn)
 	defer h.hub.Unregister(sessionID, conn)
 
-	snap, err := h.manager.GetSnapshot(sessionID)
+	envelope, err := h.buildRuntimeEnvelope(sessionID)
 	if err == nil {
-		h.hub.Broadcast(sessionID, session.Event{Type: "SESSION_SNAPSHOT", Session: snap})
+		envelope.Type = "SESSION_SNAPSHOT"
+		h.hub.Broadcast(sessionID, envelope)
 	}
 
 	for {
@@ -617,6 +891,28 @@ func (h *Handler) sessionSocket(c *gin.Context) {
 			return
 		}
 	}
+}
+
+func (h *Handler) buildRuntimeEnvelope(sessionID string) (runtimeEnvelope, error) {
+	sessionSnap, err := h.manager.GetSnapshot(sessionID)
+	if err != nil {
+		return runtimeEnvelope{}, err
+	}
+
+	if h.programItemManager == nil {
+		return runtimeEnvelope{Session: sessionSnap}, nil
+	}
+
+	current, next, err := h.programItemManager.CurrentAndNextSnapshots(sessionID, time.Now().UTC())
+	if err != nil {
+		return runtimeEnvelope{}, err
+	}
+
+	return runtimeEnvelope{
+		Session:         sessionSnap,
+		ProgramItem:     current,
+		NextProgramItem: next,
+	}, nil
 }
 
 func (h *Handler) authorizeControl(c *gin.Context, sessionID string) bool {

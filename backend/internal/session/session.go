@@ -22,37 +22,27 @@ var (
 )
 
 type Session struct {
-	ID                         string
-	Title                      string
-	SpeakerName                string
-	DurationSeconds            int
-	Status                     string
-	StartedAt                  *time.Time
-	PausedAt                   *time.Time
-	TotalPausedDurationSeconds int
-	AdjustmentSeconds          int
-	EndedRemainingSeconds      *int
-	ControlToken               string
-	CreatedAt                  time.Time
+	ID              string
+	Title           string
+	SpeakerName     string
+	DurationSeconds int
+	Status          string
+	ControlToken    string
+	CreatedAt       time.Time
 }
 
 type Snapshot struct {
-	ID                         string     `json:"id"`
-	Title                      string     `json:"title"`
-	SpeakerName                string     `json:"speakerName"`
-	DurationSeconds            int        `json:"durationSeconds"`
-	Status                     string     `json:"status"`
-	StartedAt                  *time.Time `json:"startedAt,omitempty"`
-	PausedAt                   *time.Time `json:"pausedAt,omitempty"`
-	TotalPausedDurationSeconds int        `json:"totalPausedDurationSeconds"`
-	CreatedAt                  time.Time  `json:"createdAt"`
-	RemainingSeconds           int        `json:"remainingSeconds"`
+	ID              string    `json:"id"`
+	Title           string    `json:"title"`
+	SpeakerName     string    `json:"speakerName"`
+	DurationSeconds int       `json:"durationSeconds"`
+	Status          string    `json:"status"`
+	CreatedAt       time.Time `json:"createdAt"`
 }
 
 type Event struct {
 	Type         string   `json:"type"`
 	Session      Snapshot `json:"session"`
-	StartedAt    int64    `json:"startedAt,omitempty"`
 	DeltaSeconds int      `json:"deltaSeconds,omitempty"`
 }
 
@@ -103,7 +93,7 @@ func (m *Manager) Create(input CreateInput) (Snapshot, string, error) {
 		return Snapshot{}, "", err
 	}
 
-	return buildSnapshot(s, now), token, nil
+	return buildSnapshot(s), token, nil
 }
 
 func (m *Manager) GetSnapshot(id string) (Snapshot, error) {
@@ -111,7 +101,7 @@ func (m *Manager) GetSnapshot(id string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return buildSnapshot(s, time.Now().UTC()), nil
+	return buildSnapshot(s), nil
 }
 
 func (m *Manager) ListSnapshots() ([]Snapshot, error) {
@@ -120,10 +110,9 @@ func (m *Manager) ListSnapshots() ([]Snapshot, error) {
 		return nil, err
 	}
 
-	now := time.Now().UTC()
 	snapshots := make([]Snapshot, 0, len(sessions))
 	for _, s := range sessions {
-		snapshots = append(snapshots, buildSnapshot(s, now))
+		snapshots = append(snapshots, buildSnapshot(s))
 	}
 
 	return snapshots, nil
@@ -134,8 +123,6 @@ func (m *Manager) ValidateControlToken(id, token string) error {
 }
 
 func (m *Manager) Start(id string) (Event, error) {
-	now := time.Now().UTC()
-
 	s, err := m.store.Get(id)
 	if err != nil {
 		return Event{}, err
@@ -145,20 +132,16 @@ func (m *Manager) Start(id string) (Event, error) {
 	}
 
 	s.Status = StatusLive
-	s.StartedAt = &now
-	s.PausedAt = nil
 
 	if err = m.store.Update(s); err != nil {
 		return Event{}, err
 	}
 
-	snapshot := buildSnapshot(s, now)
-	return Event{Type: "SESSION_STARTED", Session: snapshot, StartedAt: now.Unix()}, nil
+	snapshot := buildSnapshot(s)
+	return Event{Type: "SESSION_STARTED", Session: snapshot}, nil
 }
 
 func (m *Manager) Pause(id string) (Event, error) {
-	now := time.Now().UTC()
-
 	s, err := m.store.Get(id)
 	if err != nil {
 		return Event{}, err
@@ -168,43 +151,35 @@ func (m *Manager) Pause(id string) (Event, error) {
 	}
 
 	s.Status = StatusPaused
-	s.PausedAt = &now
 
 	if err = m.store.Update(s); err != nil {
 		return Event{}, err
 	}
 
-	snapshot := buildSnapshot(s, now)
+	snapshot := buildSnapshot(s)
 	return Event{Type: "SESSION_PAUSED", Session: snapshot}, nil
 }
 
 func (m *Manager) Resume(id string) (Event, error) {
-	now := time.Now().UTC()
-
 	s, err := m.store.Get(id)
 	if err != nil {
 		return Event{}, err
 	}
-	if s.Status != StatusPaused || s.PausedAt == nil {
+	if s.Status != StatusPaused {
 		return Event{}, ErrInvalidTransition
 	}
 
-	pausedFor := now.Sub(*s.PausedAt)
-	s.TotalPausedDurationSeconds += int(pausedFor.Seconds())
-	s.PausedAt = nil
 	s.Status = StatusLive
 
 	if err = m.store.Update(s); err != nil {
 		return Event{}, err
 	}
 
-	snapshot := buildSnapshot(s, now)
+	snapshot := buildSnapshot(s)
 	return Event{Type: "SESSION_RESUMED", Session: snapshot}, nil
 }
 
 func (m *Manager) End(id string) (Event, error) {
-	now := time.Now().UTC()
-
 	s, err := m.store.Get(id)
 	if err != nil {
 		return Event{}, err
@@ -212,23 +187,17 @@ func (m *Manager) End(id string) (Event, error) {
 	if s.Status != StatusLive && s.Status != StatusPaused {
 		return Event{}, ErrInvalidTransition
 	}
-
-	remaining := computeRemainingSeconds(s, now)
-	s.EndedRemainingSeconds = &remaining
 	s.Status = StatusEnded
-	s.PausedAt = nil
 
 	if err = m.store.Update(s); err != nil {
 		return Event{}, err
 	}
 
-	snapshot := buildSnapshot(s, now)
+	snapshot := buildSnapshot(s)
 	return Event{Type: "SESSION_ENDED", Session: snapshot}, nil
 }
 
 func (m *Manager) AdjustTime(id string, deltaSeconds int) (Event, error) {
-	now := time.Now().UTC()
-
 	s, err := m.store.Get(id)
 	if err != nil {
 		return Event{}, err
@@ -237,13 +206,13 @@ func (m *Manager) AdjustTime(id string, deltaSeconds int) (Event, error) {
 		return Event{}, ErrInvalidTransition
 	}
 
-	s.AdjustmentSeconds += deltaSeconds
+	s.DurationSeconds += deltaSeconds
 
 	if err = m.store.Update(s); err != nil {
 		return Event{}, err
 	}
 
-	snapshot := buildSnapshot(s, now)
+	snapshot := buildSnapshot(s)
 	return Event{Type: "TIME_ADJUSTED", Session: snapshot, DeltaSeconds: deltaSeconds}, nil
 }
 
@@ -251,46 +220,14 @@ func (m *Manager) SessionExists(id string) bool {
 	return m.store.SessionExists(id)
 }
 
-func buildSnapshot(s *Session, now time.Time) Snapshot {
+func buildSnapshot(s *Session) Snapshot {
 	return Snapshot{
-		ID:                         s.ID,
-		Title:                      s.Title,
-		SpeakerName:                s.SpeakerName,
-		DurationSeconds:            s.DurationSeconds,
-		Status:                     s.Status,
-		StartedAt:                  s.StartedAt,
-		PausedAt:                   s.PausedAt,
-		TotalPausedDurationSeconds: s.TotalPausedDurationSeconds,
-		CreatedAt:                  s.CreatedAt,
-		RemainingSeconds:           computeRemainingSeconds(s, now),
-	}
-}
-
-func computeRemainingSeconds(s *Session, now time.Time) int {
-	base := s.DurationSeconds + s.AdjustmentSeconds
-
-	switch s.Status {
-	case StatusCreated:
-		return base
-	case StatusLive:
-		if s.StartedAt == nil {
-			return base
-		}
-		elapsed := int(now.Sub(*s.StartedAt).Seconds()) - s.TotalPausedDurationSeconds
-		return base - elapsed
-	case StatusPaused:
-		if s.StartedAt == nil || s.PausedAt == nil {
-			return base
-		}
-		elapsed := int(s.PausedAt.Sub(*s.StartedAt).Seconds()) - s.TotalPausedDurationSeconds
-		return base - elapsed
-	case StatusEnded:
-		if s.EndedRemainingSeconds != nil {
-			return *s.EndedRemainingSeconds
-		}
-		return base
-	default:
-		return base
+		ID:              s.ID,
+		Title:           s.Title,
+		SpeakerName:     s.SpeakerName,
+		DurationSeconds: s.DurationSeconds,
+		Status:          s.Status,
+		CreatedAt:       s.CreatedAt,
 	}
 }
 

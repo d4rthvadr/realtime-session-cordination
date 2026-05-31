@@ -13,7 +13,6 @@ interface BackendSessionSnapshot {
   title: string;
   speakerName: string;
   durationSeconds: number;
-  remainingSeconds: number;
   status: SessionSnapshot["status"];
   createdAt?: string;
 }
@@ -22,8 +21,10 @@ interface BackendSessionResponse {
   session: BackendSessionSnapshot;
 }
 
-interface BackendCurrentProgramItemResponse {
-  programItem: ProgramItemSnapshot | null;
+interface BackendRuntimeEnvelope {
+  type?: string;
+  session: BackendSessionSnapshot;
+  programItem?: ProgramItemSnapshot | null;
   nextProgramItem?: ProgramItemSnapshot | null;
 }
 
@@ -39,7 +40,6 @@ function normalizeSnapshot(snapshot: BackendSessionSnapshot): SessionSnapshot {
     title: snapshot.title,
     speakerName: snapshot.speakerName,
     durationSeconds: snapshot.durationSeconds,
-    serverRemainingSeconds: snapshot.remainingSeconds,
     status: snapshot.status,
     serverNowMs: Date.now(),
   };
@@ -47,10 +47,9 @@ function normalizeSnapshot(snapshot: BackendSessionSnapshot): SessionSnapshot {
 
 export function useSessionSocket(sessionId: string): void {
   const setSnapshot = useSessionStore((state) => state.setSnapshot);
-  const setCurrentProgramItem = useSessionStore(
-    (state) => state.setCurrentProgramItem,
+  const setRuntimeSnapshot = useSessionStore(
+    (state) => state.setRuntimeSnapshot,
   );
-  const setNextProgramItem = useSessionStore((state) => state.setNextProgramItem);
   const setConnectionState = useSessionStore(
     (state) => state.setConnectionState,
   );
@@ -63,29 +62,15 @@ export function useSessionSocket(sessionId: string): void {
     let cancelled = false;
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let currentItemRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
     resetSession();
 
-    const refreshCurrentProgramItem = async () => {
-      try {
-        const response = await fetch(
-          buildUserApiUrl(`/api/v1/sessions/${sessionId}/current-program-item`),
-        );
-
-        if (!response.ok) {
-          return;
-        }
-
-        const payload =
-          (await response.json()) as BackendCurrentProgramItemResponse;
-        if (!cancelled) {
-          setCurrentProgramItem(payload.programItem ?? null);
-          setNextProgramItem(payload.nextProgramItem ?? null);
-        }
-      } catch {
-        // Ignore refresh failures and keep last known value.
-      }
+    const applyRuntime = (runtime: BackendRuntimeEnvelope) => {
+      setRuntimeSnapshot({
+        session: normalizeSnapshot(runtime.session),
+        programItem: runtime.programItem ?? null,
+        nextProgramItem: runtime.nextProgramItem ?? null,
+      });
     };
 
     const connect = async () => {
@@ -107,11 +92,10 @@ export function useSessionSocket(sessionId: string): void {
           throw new Error(`failed to load session ${sessionId}`);
         }
 
-        const payload = (await response.json()) as BackendSessionResponse;
+        const payload = (await response.json()) as BackendRuntimeEnvelope;
         if (!cancelled) {
           setSessionNotFound(false);
-          setSnapshot(normalizeSnapshot(payload.session));
-          await refreshCurrentProgramItem();
+          applyRuntime(payload);
         }
 
         const wsUrl = buildUserWsUrl(`/ws/sessions/${sessionId}`);
@@ -129,34 +113,23 @@ export function useSessionSocket(sessionId: string): void {
           }
 
           try {
-            const message = JSON.parse(String(event.data)) as BackendProgramItemMessage;
+            const message = JSON.parse(
+              String(event.data),
+            ) as BackendProgramItemMessage;
 
             if (message.session) {
-              setSnapshot(normalizeSnapshot(message.session));
-              void refreshCurrentProgramItem();
+              applyRuntime({
+                type: message.type,
+                session: message.session,
+                programItem: message.programItem,
+                nextProgramItem: message.nextProgramItem,
+              });
               return;
             }
 
-            if (
-              message.type === "PROGRAM_ITEM_STARTED" ||
-              message.type === "PROGRAM_ITEM_ENDED"
-            ) {
-              setCurrentProgramItem(message.programItem ?? null);
-              setNextProgramItem(message.nextProgramItem ?? null);
-              void refreshCurrentProgramItem();
-              return;
-            }
-
-            if (
-              message.type === "PROGRAM_ITEM_CREATED" ||
-              message.type === "PROGRAM_ITEM_UPDATED" ||
-              message.type === "PROGRAM_ITEM_CANCELED" ||
-              message.type === "PROGRAM_ITEM_STARTED" ||
-              message.type === "PROGRAM_ITEM_ENDED" ||
-              message.type === "PROGRAM_ITEMS_REORDERED"
-            ) {
-              void refreshCurrentProgramItem();
-              return;
+            // Backward-compatible fallback: legacy session-only messages.
+            if (message.type && !message.session) {
+              setSnapshot({ serverNowMs: Date.now() });
             }
           } catch {
             // Ignore malformed messages during the smoke phase.
@@ -181,10 +154,6 @@ export function useSessionSocket(sessionId: string): void {
             setConnectionState("disconnected");
           }
         };
-
-        currentItemRefreshTimer = setInterval(() => {
-          void refreshCurrentProgramItem();
-        }, 15000);
       } catch {
         if (!cancelled) {
           setConnectionState("disconnected");
@@ -199,9 +168,6 @@ export function useSessionSocket(sessionId: string): void {
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
       }
-      if (currentItemRefreshTimer) {
-        clearInterval(currentItemRefreshTimer);
-      }
       if (socket) {
         socket.close();
       }
@@ -209,10 +175,9 @@ export function useSessionSocket(sessionId: string): void {
   }, [
     resetSession,
     sessionId,
-    setCurrentProgramItem,
-    setNextProgramItem,
     setConnectionState,
     setSessionNotFound,
+    setRuntimeSnapshot,
     setSnapshot,
   ]);
 }

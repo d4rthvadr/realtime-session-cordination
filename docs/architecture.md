@@ -1,5 +1,27 @@
 # Architecture & Design
 
+## Runtime Authority Update (2026-05)
+
+Runtime countdown authority is now split by intent:
+
+- Session remains the container lifecycle and control-token authority.
+- Active ProgramItem is the runtime countdown authority when present.
+- Runtime actions return a unified envelope with session, current programItem, and nextProgramItem.
+
+This removes countdown drift between session controls and agenda controls.
+
+Detailed countdown math by ProgramItem status is documented in docs/programitem-time-calculation.md.
+
+## Session Entity Cleanup Status
+
+Session cleanup follow-up has been applied for runtime mutation paths.
+
+Current state:
+
+- Session runtime persistence fields were removed from the Session entity.
+- Adjust-time mutation coupling no longer writes to both Session and active ProgramItem.
+- Session adjust-time now prioritizes active ProgramItem runtime when present, with Session-only fallback when no active runtime item exists.
+
 ## System Overview
 
 The Realtime Session Coordination Platform is a three-tier system:
@@ -67,11 +89,11 @@ The Realtime Session Coordination Platform is a three-tier system:
 **Data Flow:**
 
 1. Page mounts → loads session via `GET /api/v1/sessions/:id`
-2. Store initialized with `ServerSnapshot` (id, title, speaker, duration, status, remainingSeconds)
+2. Store initializes from unified runtime envelope (`session`, `programItem`, `nextProgramItem`)
 3. WebSocket connects to `ws://localhost:8080/ws/sessions/:id`
-4. Receives `SESSION_SNAPSHOT` on connect (broadcasts current state)
-5. On WebSocket `SESSION_UPDATE`, snapshot replaces client state (server-authoritative)
-6. UI renders countdown with urgency color based on remaining time
+4. Receives unified runtime snapshot on connect (same shape as REST)
+5. On runtime updates, store applies session + program item snapshot atomically
+6. UI renders countdown from active ProgramItem `remainingSeconds` when present, else `00:00`
    - Green (safe): > 25% of duration
    - Yellow (warning): 10-25% of duration
    - Red (critical): < 10% of duration
@@ -80,28 +102,30 @@ The Realtime Session Coordination Platform is a three-tier system:
 **State Shape:**
 
 ```typescript
-interface ServerSnapshot {
-  id: string;
-  title: string;
-  speakerName: string;
-  durationSeconds: number;
-  status: "CREATED" | "LIVE" | "PAUSED" | "ENDED";
-  remainingSeconds: number;
+interface RuntimeEnvelope {
+  session: {
+    id: string;
+    title: string;
+    speakerName: string;
+    durationSeconds: number;
+    status: "CREATED" | "LIVE" | "PAUSED" | "ENDED";
+  };
+  programItem: ProgramItemSnapshot | null;
+  nextProgramItem: ProgramItemSnapshot | null;
 }
 
 interface SessionState {
-  snapshot: ServerSnapshot | null;
-  localRemainingSeconds: number; // client-side tick
+  runtime: RuntimeEnvelope | null;
   connectionState: "disconnected" | "connecting" | "connected";
-  isLoading: boolean;
-  error: string | null;
+  hasReceivedSnapshot: boolean;
+  sessionNotFound: boolean;
 }
 ```
 
 **Synchronization Strategy:**
 
-- **Server authoritative:** All timing originates from backend
-- **Snapshot-driven UI:** Client renders server snapshots and websocket updates
+- **ProgramItem runtime authoritative:** Active ProgramItem owns countdown when present
+- **Envelope-driven UI:** Client renders one payload shape across REST and WebSocket
 - **Reconnect handling:** On WebSocket reconnect, loads fresh session state and re-establishes connection
 
 ---
@@ -139,7 +163,6 @@ interface Session {
   speakerName: string;
   durationSeconds: number;
   status: "CREATED" | "LIVE" | "PAUSED" | "ENDED";
-  remainingSeconds: number;
 }
 
 interface AdminSessionState {
@@ -205,24 +228,12 @@ interface AdminSessionState {
 
 **Authoritative Timing:**
 
-The server owns all timing calculations. Clients receive:
+The server owns runtime calculations and returns current values in each runtime envelope.
 
-- `remainingSeconds` — current countdown value (recalculated per request)
-- `status` — current session state
+- `programItem.remainingSeconds` is authoritative when an active item exists.
+- Without an active ProgramItem, viewer countdown is `00:00`.
 
-Remaining time calculation:
-
-```
-if status == LIVE:
-  elapsed = now - sessionStartTime
-  remainingSeconds = max(0, durationSeconds - elapsed)
-else if status == PAUSED:
-  remainingSeconds = pausedRemainingSeconds
-else:
-  remainingSeconds = based on status
-```
-
-This ensures all viewers see synchronized time regardless of client clock drift.
+Detailed formula and status-based math are documented in docs/programitem-time-calculation.md.
 
 ---
 
@@ -237,10 +248,10 @@ This ensures all viewers see synchronized time regardless of client clock drift.
 - `Broadcast(sessionID, message)` — send to all connected clients
 - `SendSnapshot(sessionID, connection)` — send current state to single client
 
-**Message Types:**
+**Message Shape:**
 
-- `SESSION_SNAPSHOT` — sent on connect, includes full session state
-- `SESSION_UPDATE` — sent on any state change, includes updated fields
+- WebSocket connect and update payloads use the unified runtime envelope.
+- Runtime action events include `type` and envelope fields (`session`, `programItem`, `nextProgramItem`).
 
 **Broadcast Flow:**
 
@@ -293,6 +304,7 @@ ProgramItem statuses:
 
 - `scheduled`
 - `in_progress`
+- `paused`
 - `ended`
 - `canceled`
 
@@ -348,7 +360,8 @@ Viewer context resolves the active timeline item from backend logic:
 2. Select item where `scheduledStart <= now < scheduledEnd`.
 3. Return `null` when no active item exists.
 
-This logic is exposed by `GET /api/v1/sessions/:id/current-program-item`.
+This logic is exposed by `GET /api/v1/sessions/:id/current-program-item` as a compatibility read endpoint.
+Primary viewer synchronization should use `GET /api/v1/sessions/:id` and WebSocket runtime envelopes.
 
 ---
 
@@ -392,27 +405,19 @@ Admin App                   WebSocket    Backend              User App
 User App                              Backend
   │                                     │
   ├─ GET /api/v1/sessions/:id ────────►│
-  │◄─ 200 + session snapshot ──────────│
-  ├─ GET /api/v1/sessions/:id/current-program-item ───────────►│
-  │◄─ 200 + { programItem | null } ────────────────────────────│
+  │◄─ 200 + runtime envelope ──────────│
   │                                     │
   ├─ Upgrade to WebSocket──────────────►│
-  │                                      │ Send snapshot
-  │◄─ SESSION_SNAPSHOT ─────────────────│
+  │                                      │ Send runtime envelope
+  │◄─ Runtime snapshot ──────────────────│
   │                                      │
-  ├─ Store snapshot                      │
-  ├─ Start local tick (every 100ms)      │
+  ├─ Store runtime envelope              │
+  ├─ Start local display tick (1s)       │
   │                                      │
-  ├─ Tick ──────────► Decrement time     │
-  ├─ Tick ──────────► Decrement time     │
-  ├─ Tick ──────────► Decrement time     │
+  │◄─ Runtime update envelope ──────────│
   │                                      │
-  │◄─ SESSION_UPDATE (from host action)─│
-  │◄─ PROGRAM_ITEM_* event ─────────────│
-  │                                      │
-  ├─ Replace snapshot (re-sync)          │
-  ├─ Refresh current ProgramItem          │
-  ├─ Restart local tick                  │
+  ├─ Replace runtime envelope (re-sync)  │
+  ├─ Derive countdown from active item   │
   │                                      │
 ```
 

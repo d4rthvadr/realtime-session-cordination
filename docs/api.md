@@ -1,5 +1,134 @@
 # API Structure & Endpoints
 
+## Runtime Contract Update (2026-05)
+
+This section is the active contract for runtime countdown behavior and response shapes.
+Older examples below remain useful historical context, but runtime control endpoints now return a unified envelope.
+
+### Unified Runtime Envelope
+
+Runtime endpoints now return:
+
+```json
+{
+  "type": "SESSION_PAUSED",
+  "session": {
+    "id": "sess_abc123",
+    "title": "Engineering Talks Q&A",
+    "speakerName": "Alice Johnson",
+    "durationSeconds": 600,
+    "status": "PAUSED",
+    "createdAt": "2026-05-31T10:00:00Z"
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "sessionId": "sess_abc123",
+    "title": "Panel Discussion",
+    "type": "panel",
+    "status": "paused",
+    "runtimeDurationSeconds": 1200,
+    "actualStart": "2026-05-31T10:20:00Z",
+    "pausedAt": "2026-05-31T10:28:08Z",
+    "totalPausedDurationSeconds": 75,
+    "adjustmentSeconds": 60,
+    "endedRemainingSeconds": null,
+    "actualEnd": null,
+    "pauseCount": 1,
+    "endedReason": "",
+    "remainingSeconds": 717,
+    "hostName": "Alice Johnson",
+    "scheduledStart": "2026-05-31T10:20:00Z",
+    "scheduledEnd": "2026-05-31T10:40:00Z",
+    "expectedDurationMinutes": 20,
+    "position": 4,
+    "location": "Main Hall",
+    "metadata": { "track": "engineering" },
+    "createdAt": "2026-05-31T09:00:00Z",
+    "updatedAt": "2026-05-31T10:28:08Z"
+  },
+  "nextProgramItem": {
+    "id": "pi_def456",
+    "sessionId": "sess_abc123",
+    "title": "Q&A",
+    "type": "q&a",
+    "status": "scheduled",
+    "runtimeDurationSeconds": 600,
+    "totalPausedDurationSeconds": 0,
+    "adjustmentSeconds": 0,
+    "pauseCount": 0,
+    "remainingSeconds": 600,
+    "scheduledStart": "2026-05-31T10:40:00Z",
+    "scheduledEnd": "2026-05-31T10:50:00Z",
+    "expectedDurationMinutes": 10,
+    "position": 5,
+    "createdAt": "2026-05-31T09:00:00Z",
+    "updatedAt": "2026-05-31T09:00:00Z"
+  },
+  "deltaSeconds": 60
+}
+```
+
+Notes:
+
+- type is included on runtime mutations and websocket snapshots.
+- deltaSeconds is only present on adjust-time operations.
+- programItem is the active runtime authority when present.
+- nextProgramItem may be null when no upcoming item exists.
+
+### ProgramItem Runtime Status Values
+
+- scheduled
+- in_progress
+- paused
+- ended
+- canceled
+
+### ProgramItem Runtime Fields
+
+- runtimeDurationSeconds: Base runtime budget for this item.
+- adjustmentSeconds: Net manual adjustment applied to runtime budget.
+- actualStart: Runtime start timestamp.
+- pausedAt: Current pause start timestamp, present only while paused.
+- totalPausedDurationSeconds: Cumulative completed paused duration.
+- endedRemainingSeconds: Frozen remaining time at end.
+- actualEnd: Runtime end timestamp.
+- pauseCount: Number of completed pause intervals.
+- endedReason: End reason label, currently manual.
+- remainingSeconds: Server-computed runtime countdown.
+
+### Session Runtime Field Deprecation (Applied)
+
+Session runtime columns were removed from persistence. Session now remains lifecycle/container metadata (`id`, `title`, `speakerName`, `durationSeconds`, `status`, `createdAt`).
+
+Removed session persistence fields:
+
+- startedAt
+- pausedAt
+- totalPausedDurationSeconds
+- adjustmentSeconds
+- endedRemainingSeconds
+
+See detailed formulas in docs/programitem-time-calculation.md.
+
+### Runtime Endpoint Summary
+
+- GET /api/v1/sessions/:id returns unified runtime envelope.
+- GET /api/v1/sessions/:id/current-program-item returns current and next ProgramItem snapshots.
+- POST /api/v1/sessions/:id/start returns unified runtime envelope.
+- POST /api/v1/sessions/:id/pause returns unified runtime envelope.
+- POST /api/v1/sessions/:id/resume returns unified runtime envelope.
+- POST /api/v1/sessions/:id/end returns unified runtime envelope.
+- POST /api/v1/sessions/:id/adjust-time returns unified runtime envelope with deltaSeconds.
+- POST /api/v1/program-items/:itemId/start returns unified runtime envelope.
+- POST /api/v1/program-items/:itemId/pause returns unified runtime envelope.
+- POST /api/v1/program-items/:itemId/resume returns unified runtime envelope.
+- POST /api/v1/program-items/:itemId/adjust-time returns unified runtime envelope with deltaSeconds.
+- POST /api/v1/program-items/:itemId/end returns unified runtime envelope.
+
+### WebSocket Snapshot
+
+The websocket connect snapshot and runtime updates now use the same unified runtime envelope shape.
+
 ## Base URL
 
 **Development:** `http://localhost:8080`
@@ -78,7 +207,6 @@ Create a new timed session.
     "speakerName": "Alice Johnson",
     "durationSeconds": 600,
     "status": "CREATED",
-    "remainingSeconds": 600,
     "createdAt": "2025-12-15T10:30:00Z"
   },
   "controlToken": "token_xyz789",
@@ -93,7 +221,6 @@ Create a new timed session.
 - `speakerName`: Speaker or presenter name
 - `durationSeconds`: Total session duration in seconds
 - `status`: Session state (CREATED | LIVE | PAUSED | ENDED)
-- `remainingSeconds`: Time remaining in seconds (server-authoritative)
 - `createdAt`: ISO 8601 timestamp of creation
 - `controlToken`: Secret token for host operations (store in sessionStorage)
 
@@ -105,21 +232,23 @@ Create a new timed session.
 GET /api/v1/sessions/:id
 ```
 
-Retrieve current session state. No authentication required (read-only).
+Retrieve current runtime envelope. No authentication required (read-only).
 
 **Response (200):**
 
 ```json
 {
+  "type": "SESSION_SNAPSHOT",
   "session": {
     "id": "sess_abc123",
     "title": "Engineering Talks Q&A",
     "speakerName": "Alice Johnson",
     "durationSeconds": 600,
     "status": "LIVE",
-    "remainingSeconds": 450,
     "createdAt": "2025-12-15T10:30:00Z"
-  }
+  },
+  "programItem": null,
+  "nextProgramItem": null
 }
 ```
 
@@ -144,6 +273,8 @@ Read endpoints require bearer authorization only.
 
 ### ProgramItem Shape
 
+Base scheduling fields:
+
 ```json
 {
   "id": "pi_abc123",
@@ -167,8 +298,11 @@ Read endpoints require bearer authorization only.
 
 - `scheduled`
 - `in_progress`
+- `paused`
 - `ended`
 - `canceled`
+
+Runtime fields for active contract (`runtimeDurationSeconds`, `remainingSeconds`, `actualStart`, `pausedAt`, `totalPausedDurationSeconds`, `adjustmentSeconds`, `endedRemainingSeconds`, `actualEnd`, `pauseCount`, `endedReason`) are documented in Runtime Contract Update above.
 
 ### List ProgramItems
 
@@ -186,6 +320,7 @@ GET /api/v1/sessions/:id/current-program-item
 ```
 
 Returns current and next ProgramItem context for the supplied timestamp on the server.
+This endpoint is retained as a compatibility read endpoint; primary viewer sync should consume `GET /api/v1/sessions/:id` unified runtime envelope and websocket runtime updates.
 
 Selection behavior:
 
@@ -331,16 +466,19 @@ POST /api/v1/sessions/:id/start
 X-Control-Token: <token>
 ```
 
-Transition session from CREATED → LIVE. Starts authoritative server timer.
+Transition session from CREATED → LIVE.
 
 **Response (200):**
 
 ```json
 {
-  "id": "sess_abc123",
-  "status": "LIVE",
-  "remainingSeconds": 600,
-  "updatedAt": "2025-12-15T10:31:00Z"
+  "type": "SESSION_STARTED",
+  "session": {
+    "id": "sess_abc123",
+    "status": "LIVE"
+  },
+  "programItem": null,
+  "nextProgramItem": null
 }
 ```
 
@@ -358,16 +496,23 @@ POST /api/v1/sessions/:id/pause
 X-Control-Token: <token>
 ```
 
-Transition session from LIVE → PAUSED. Freezes countdown.
+Transition session from LIVE → PAUSED.
 
 **Response (200):**
 
 ```json
 {
-  "id": "sess_abc123",
-  "status": "PAUSED",
-  "remainingSeconds": 300,
-  "updatedAt": "2025-12-15T10:32:00Z"
+  "type": "SESSION_PAUSED",
+  "session": {
+    "id": "sess_abc123",
+    "status": "PAUSED"
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "status": "paused",
+    "remainingSeconds": 300
+  },
+  "nextProgramItem": null
 }
 ```
 
@@ -386,10 +531,17 @@ Transition session from PAUSED → LIVE. Resumes countdown from where it was pau
 
 ```json
 {
-  "id": "sess_abc123",
-  "status": "LIVE",
-  "remainingSeconds": 300,
-  "updatedAt": "2025-12-15T10:33:00Z"
+  "type": "SESSION_RESUMED",
+  "session": {
+    "id": "sess_abc123",
+    "status": "LIVE"
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "status": "in_progress",
+    "remainingSeconds": 300
+  },
+  "nextProgramItem": null
 }
 ```
 
@@ -403,7 +555,12 @@ X-Control-Token: <token>
 Content-Type: application/json
 ```
 
-Add or subtract seconds from remaining time. Useful for extending or shortening sessions.
+Add or subtract seconds from runtime. Useful for extending or shortening live delivery.
+
+Runtime behavior:
+
+- If an active ProgramItem runtime exists (`in_progress` or `paused`), delta is applied to that ProgramItem.
+- If no active ProgramItem runtime exists, delta updates session `durationSeconds` lifecycle metadata.
 
 **Request Body:**
 
@@ -425,10 +582,18 @@ Use negative values to reduce time:
 
 ```json
 {
-  "id": "sess_abc123",
-  "status": "LIVE",
-  "remainingSeconds": 360,
-  "updatedAt": "2025-12-15T10:34:00Z"
+  "type": "TIME_ADJUSTED",
+  "session": {
+    "id": "sess_abc123",
+    "status": "LIVE"
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "status": "in_progress",
+    "remainingSeconds": 360
+  },
+  "nextProgramItem": null,
+  "deltaSeconds": 60
 }
 ```
 
@@ -447,10 +612,13 @@ Transition session to ENDED. No further state changes allowed.
 
 ```json
 {
-  "id": "sess_abc123",
-  "status": "ENDED",
-  "remainingSeconds": 0,
-  "updatedAt": "2025-12-15T10:35:00Z"
+  "type": "SESSION_ENDED",
+  "session": {
+    "id": "sess_abc123",
+    "status": "ENDED"
+  },
+  "programItem": null,
+  "nextProgramItem": null
 }
 ```
 
@@ -475,50 +643,59 @@ Establishes a persistent WebSocket connection for receiving real-time session up
 
 ### Session Snapshot (on connect)
 
-When the client connects, the server immediately sends the current session state:
+When the client connects, the server immediately sends the unified runtime envelope:
 
 ```json
 {
   "type": "SESSION_SNAPSHOT",
-  "data": {
+  "session": {
     "id": "sess_abc123",
     "title": "Engineering Talks Q&A",
     "speakerName": "Alice Johnson",
     "durationSeconds": 600,
     "status": "LIVE",
-    "remainingSeconds": 420,
     "createdAt": "2025-12-15T10:30:00Z"
-  }
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "status": "in_progress",
+    "remainingSeconds": 420
+  },
+  "nextProgramItem": null
 }
 ```
 
 ### Session Update (on state change)
 
-When the host changes session state (start, pause, resume, end, adjust), all connected WebSocket clients receive an update:
+When runtime state changes (session or program item actions), connected clients receive an updated runtime envelope.
 
 ```json
 {
-  "type": "SESSION_UPDATE",
-  "data": {
+  "type": "SESSION_PAUSED",
+  "session": {
     "id": "sess_abc123",
     "status": "PAUSED",
-    "remainingSeconds": 300,
-    "updatedAt": "2025-12-15T10:32:00Z"
-  }
+    "remainingSeconds": 300
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "status": "paused",
+    "remainingSeconds": 300
+  },
+  "nextProgramItem": null
 }
 ```
 
 ### ProgramItem Update (on timeline change)
 
-When ProgramItems are created, updated, canceled, or reordered, all connected clients receive one of:
+When ProgramItems are created, updated, canceled, or reordered, connected clients may receive event messages such as:
 
 - `PROGRAM_ITEM_CREATED`
 - `PROGRAM_ITEM_UPDATED`
 - `PROGRAM_ITEM_CANCELED`
 - `PROGRAM_ITEMS_REORDERED`
 
-User viewers should treat these as refresh triggers for
-`GET /api/v1/sessions/:id/current-program-item` to stay aligned with server-side item selection.
+For runtime timer and now/next state, user viewers should rely on unified runtime envelope updates.
 
 ---
 
