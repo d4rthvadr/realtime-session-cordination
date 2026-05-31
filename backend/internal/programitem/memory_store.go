@@ -10,8 +10,8 @@ type SessionExistsFunc func(sessionID string) bool
 
 // MemoryStore is an in-memory ProgramItem store implementation.
 type MemoryStore struct {
-	mu              sync.RWMutex
-	locksMu         sync.Mutex
+	mu      sync.RWMutex
+	locksMu sync.Mutex
 	// sessionLocks keeps one mutex per session so writes for different sessions stay independent.
 	sessionLocks    map[string]*sync.Mutex
 	items           map[string]*ProgramItem
@@ -102,6 +102,75 @@ func (ms *MemoryStore) Update(item *ProgramItem) error {
 	return nil
 }
 
+func (ms *MemoryStore) TransitionToInProgress(id string, at time.Time) (*ProgramItem, error) {
+	sessionID, err := ms.sessionIDForItem(id)
+	if err != nil {
+		return nil, err
+	}
+
+	unlock := ms.lockSession(sessionID)
+	defer unlock()
+
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	item, ok := ms.items[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if item.Status != StatusScheduled {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	for _, candidate := range ms.items {
+		if candidate.SessionID != item.SessionID || candidate.ID == item.ID {
+			continue
+		}
+		if candidate.Status == StatusInProgress {
+			return nil, ErrInProgressExists
+		}
+	}
+
+	now := at.UTC()
+	item.Status = StatusInProgress
+	item.ActualStart = &now
+	item.ActualEnd = nil
+	item.UpdatedAt = now
+
+	return cloneItem(item), nil
+}
+
+func (ms *MemoryStore) TransitionToEnded(id string, at time.Time) (*ProgramItem, error) {
+	sessionID, err := ms.sessionIDForItem(id)
+	if err != nil {
+		return nil, err
+	}
+
+	unlock := ms.lockSession(sessionID)
+	defer unlock()
+
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	item, ok := ms.items[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if item.Status != StatusInProgress {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	now := at.UTC()
+	item.Status = StatusEnded
+	if item.ActualStart == nil {
+		item.ActualStart = &now
+	}
+	item.ActualEnd = &now
+	item.UpdatedAt = now
+
+	return cloneItem(item), nil
+}
+
 func (ms *MemoryStore) Reorder(sessionID string, positions map[string]int) error {
 	// Reorder is session-scoped; only one reorder/write should run for the same session at a time.
 	unlock := ms.lockSession(sessionID)
@@ -187,6 +256,18 @@ func (ms *MemoryStore) SessionExists(sessionID string) bool {
 		return false
 	}
 	return ms.sessionExistsFn(sessionID)
+}
+
+func (ms *MemoryStore) sessionIDForItem(id string) (string, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+
+	item, ok := ms.items[id]
+	if !ok {
+		return "", ErrNotFound
+	}
+
+	return item.SessionID, nil
 }
 
 func (ms *MemoryStore) lockSession(sessionID string) func() {

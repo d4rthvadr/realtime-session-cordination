@@ -8,6 +8,8 @@ type Store interface {
 	Get(id string) (*ProgramItem, error)
 	ListBySession(sessionID string) ([]*ProgramItem, error)
 	Update(item *ProgramItem) error
+	TransitionToInProgress(id string, at time.Time) (*ProgramItem, error)
+	TransitionToEnded(id string, at time.Time) (*ProgramItem, error)
 	Reorder(sessionID string, positions map[string]int) error
 	HasOverlap(sessionID string, start, end time.Time, excludeID string) (bool, error)
 	PositionExists(sessionID string, position int, excludeID string) (bool, error)

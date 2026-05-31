@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"realtime-session-coordination/backend/internal/auth"
@@ -26,6 +27,13 @@ type Handler struct {
 	authService        *auth.Service
 	logger             *slog.Logger
 	upgrader           websocket.Upgrader
+	runtimeLocksMu     sync.Mutex
+	runtimeLocks       map[string]*runtimeSessionLock
+}
+
+type runtimeSessionLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 func NewHandler(manager *session.Manager, programItemManager *programitem.Manager, hub *ws.Hub, authService *auth.Service, logger *slog.Logger) *Handler {
@@ -40,6 +48,7 @@ func NewHandler(manager *session.Manager, programItemManager *programitem.Manage
 		hub:                hub,
 		authService:        authService,
 		logger:             logger,
+		runtimeLocks:       make(map[string]*runtimeSessionLock),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -336,19 +345,30 @@ func (h *Handler) startProgramItem(c *gin.Context) {
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
-	if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
-		return
-	}
 
-	snap, err := h.programItemManager.Start(itemID)
-	if err != nil {
-		h.writeProgramItemErr(c, err)
-		return
-	}
+	var snap programitem.Snapshot
+	var nextSnap *programitem.Snapshot
+	h.withSessionRuntimeLock(item.SessionID, func() {
+		if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
+			return
+		}
 
-	_, nextSnap, nextErr := h.programItemManager.CurrentAndNextSnapshots(item.SessionID, time.Now().UTC())
-	if nextErr != nil {
-		h.writeProgramItemErr(c, nextErr)
+		startedSnap, startErr := h.programItemManager.Start(itemID)
+		if startErr != nil {
+			h.writeProgramItemErr(c, startErr)
+			return
+		}
+
+		_, derivedNext, nextErr := h.programItemManager.CurrentAndNextSnapshots(item.SessionID, time.Now().UTC())
+		if nextErr != nil {
+			h.writeProgramItemErr(c, nextErr)
+			return
+		}
+
+		snap = startedSnap
+		nextSnap = derivedNext
+	})
+	if c.IsAborted() {
 		return
 	}
 
@@ -377,19 +397,30 @@ func (h *Handler) endProgramItem(c *gin.Context) {
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
-	if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
-		return
-	}
 
-	snap, err := h.programItemManager.End(itemID)
-	if err != nil {
-		h.writeProgramItemErr(c, err)
-		return
-	}
+	var snap programitem.Snapshot
+	var nextSnap *programitem.Snapshot
+	h.withSessionRuntimeLock(item.SessionID, func() {
+		if !h.ensureProgramItemRuntimeAllowed(c, item.SessionID) {
+			return
+		}
 
-	_, nextSnap, nextErr := h.programItemManager.CurrentAndNextSnapshots(item.SessionID, time.Now().UTC())
-	if nextErr != nil {
-		h.writeProgramItemErr(c, nextErr)
+		endedSnap, endErr := h.programItemManager.End(itemID)
+		if endErr != nil {
+			h.writeProgramItemErr(c, endErr)
+			return
+		}
+
+		_, derivedNext, nextErr := h.programItemManager.CurrentAndNextSnapshots(item.SessionID, time.Now().UTC())
+		if nextErr != nil {
+			h.writeProgramItemErr(c, nextErr)
+			return
+		}
+
+		snap = endedSnap
+		nextSnap = derivedNext
+	})
+	if c.IsAborted() {
 		return
 	}
 
@@ -445,9 +476,16 @@ func (h *Handler) startSession(c *gin.Context) {
 		return
 	}
 
-	event, err := h.manager.Start(id)
-	if err != nil {
-		h.writeDomainErr(c, err)
+	var event session.Event
+	h.withSessionRuntimeLock(id, func() {
+		startedEvent, err := h.manager.Start(id)
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+		event = startedEvent
+	})
+	if c.IsAborted() {
 		return
 	}
 	c.JSON(http.StatusOK, event)
@@ -460,9 +498,16 @@ func (h *Handler) pauseSession(c *gin.Context) {
 		return
 	}
 
-	event, err := h.manager.Pause(id)
-	if err != nil {
-		h.writeDomainErr(c, err)
+	var event session.Event
+	h.withSessionRuntimeLock(id, func() {
+		pausedEvent, err := h.manager.Pause(id)
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+		event = pausedEvent
+	})
+	if c.IsAborted() {
 		return
 	}
 	c.JSON(http.StatusOK, event)
@@ -475,9 +520,16 @@ func (h *Handler) resumeSession(c *gin.Context) {
 		return
 	}
 
-	event, err := h.manager.Resume(id)
-	if err != nil {
-		h.writeDomainErr(c, err)
+	var event session.Event
+	h.withSessionRuntimeLock(id, func() {
+		resumedEvent, err := h.manager.Resume(id)
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+		event = resumedEvent
+	})
+	if c.IsAborted() {
 		return
 	}
 	c.JSON(http.StatusOK, event)
@@ -490,9 +542,16 @@ func (h *Handler) endSession(c *gin.Context) {
 		return
 	}
 
-	event, err := h.manager.End(id)
-	if err != nil {
-		h.writeDomainErr(c, err)
+	var event session.Event
+	h.withSessionRuntimeLock(id, func() {
+		endedEvent, err := h.manager.End(id)
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+		event = endedEvent
+	})
+	if c.IsAborted() {
 		return
 	}
 	c.JSON(http.StatusOK, event)
@@ -515,9 +574,16 @@ func (h *Handler) adjustTime(c *gin.Context) {
 		return
 	}
 
-	event, err := h.manager.AdjustTime(id, body.DeltaSeconds)
-	if err != nil {
-		h.writeDomainErr(c, err)
+	var event session.Event
+	h.withSessionRuntimeLock(id, func() {
+		adjustedEvent, err := h.manager.AdjustTime(id, body.DeltaSeconds)
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+		event = adjustedEvent
+	})
+	if c.IsAborted() {
 		return
 	}
 	c.JSON(http.StatusOK, event)
@@ -610,6 +676,31 @@ func (h *Handler) ensureProgramItemRuntimeAllowed(c *gin.Context, sessionID stri
 	}
 
 	return true
+}
+
+func (h *Handler) withSessionRuntimeLock(sessionID string, fn func()) {
+	h.runtimeLocksMu.Lock()
+	entry, ok := h.runtimeLocks[sessionID]
+	if !ok {
+		entry = &runtimeSessionLock{}
+		h.runtimeLocks[sessionID] = entry
+	}
+	entry.refs++
+	h.runtimeLocksMu.Unlock()
+
+	entry.mu.Lock()
+	defer func() {
+		entry.mu.Unlock()
+
+		h.runtimeLocksMu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(h.runtimeLocks, sessionID)
+		}
+		h.runtimeLocksMu.Unlock()
+	}()
+
+	fn()
 }
 
 func (h *Handler) writeDomainErr(c *gin.Context, err error) {

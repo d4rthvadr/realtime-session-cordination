@@ -405,30 +405,9 @@ func (m *Manager) Cancel(id string) (Snapshot, error) {
 }
 
 func (m *Manager) Start(id string) (Snapshot, error) {
-	item, err := m.store.Get(id)
-	if err != nil {
-		return Snapshot{}, err
-	}
-
-	if item.Status != StatusScheduled {
-		return Snapshot{}, ErrInvalidStatusTransition
-	}
-
-	hasInProgress, err := m.store.HasInProgressItem(item.SessionID, item.ID)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	if hasInProgress {
-		return Snapshot{}, ErrInProgressExists
-	}
-
 	now := time.Now().UTC()
-	item.Status = StatusInProgress
-	item.ActualStart = &now
-	item.ActualEnd = nil
-	item.UpdatedAt = now
-
-	if err = m.store.Update(item); err != nil {
+	item, err := m.store.TransitionToInProgress(id, now)
+	if err != nil {
 		return Snapshot{}, err
 	}
 
@@ -436,24 +415,9 @@ func (m *Manager) Start(id string) (Snapshot, error) {
 }
 
 func (m *Manager) End(id string) (Snapshot, error) {
-	item, err := m.store.Get(id)
-	if err != nil {
-		return Snapshot{}, err
-	}
-
-	if item.Status != StatusInProgress {
-		return Snapshot{}, ErrInvalidStatusTransition
-	}
-
 	now := time.Now().UTC()
-	item.Status = StatusEnded
-	if item.ActualStart == nil {
-		item.ActualStart = &now
-	}
-	item.ActualEnd = &now
-	item.UpdatedAt = now
-
-	if err = m.store.Update(item); err != nil {
+	item, err := m.store.TransitionToEnded(id, now)
+	if err != nil {
 		return Snapshot{}, err
 	}
 

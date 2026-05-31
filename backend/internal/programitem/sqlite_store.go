@@ -61,6 +61,9 @@ func (s *SqliteStore) runMigrations() error {
 
 	CREATE INDEX IF NOT EXISTS idx_program_items_session_id ON program_items(session_id);
 	CREATE INDEX IF NOT EXISTS idx_program_items_schedule ON program_items(session_id, scheduled_start, scheduled_end);
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_program_items_single_in_progress
+	ON program_items(session_id)
+	WHERE status = 'in_progress';
 	`
 
 	_, err := s.db.Exec(query)
@@ -263,6 +266,125 @@ func (s *SqliteStore) Update(item *ProgramItem) error {
 	return nil
 }
 
+func (s *SqliteStore) TransitionToInProgress(id string, at time.Time) (*ProgramItem, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transition transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := txGetProgramItem(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.Status != StatusScheduled {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	var hasInProgress bool
+	err = tx.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1
+			FROM program_items
+			WHERE session_id = ?
+			  AND status = ?
+			  AND id != ?
+		)
+	`, current.SessionID, StatusInProgress, current.ID).Scan(&hasInProgress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check in-progress item: %w", err)
+	}
+	if hasInProgress {
+		return nil, ErrInProgressExists
+	}
+
+	now := at.UTC().Format(time.RFC3339)
+	result, err := tx.Exec(`
+		UPDATE program_items
+		SET status = ?, updated_at = ?
+		WHERE id = ? AND status = ?
+	`, StatusInProgress, now, id, StatusScheduled)
+	if err != nil {
+		return nil, fmt.Errorf("failed to transition program item to in_progress: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if affected == 0 {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	updated, err := txGetProgramItem(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	atUTC := at.UTC()
+	updated.ActualStart = &atUTC
+	updated.ActualEnd = nil
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transition transaction: %w", err)
+	}
+
+	return updated, nil
+}
+
+func (s *SqliteStore) TransitionToEnded(id string, at time.Time) (*ProgramItem, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transition transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := txGetProgramItem(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.Status != StatusInProgress {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	now := at.UTC().Format(time.RFC3339)
+	result, err := tx.Exec(`
+		UPDATE program_items
+		SET status = ?, updated_at = ?
+		WHERE id = ? AND status = ?
+	`, StatusEnded, now, id, StatusInProgress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to transition program item to ended: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if affected == 0 {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	updated, err := txGetProgramItem(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	atUTC := at.UTC()
+	if updated.ActualStart == nil {
+		updated.ActualStart = &atUTC
+	}
+	updated.ActualEnd = &atUTC
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transition transaction: %w", err)
+	}
+
+	return updated, nil
+}
+
 func (s *SqliteStore) Reorder(sessionID string, positions map[string]int) error {
 	if len(positions) == 0 {
 		return nil
@@ -427,6 +549,30 @@ func (s *SqliteStore) Close() error {
 
 type scanner interface {
 	Scan(dest ...any) error
+}
+
+type queryRowScanner interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func txGetProgramItem(q queryRowScanner, id string) (*ProgramItem, error) {
+	row := q.QueryRow(`
+		SELECT id, session_id, title, type, status, host_name,
+		       scheduled_start, scheduled_end, expected_duration_minutes,
+		       position, location, metadata, created_at, updated_at
+		FROM program_items
+		WHERE id = ?
+	`, id)
+
+	item, err := scanProgramItem(row)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get program item: %w", err)
+	}
+
+	return item, nil
 }
 
 func scanProgramItem(s scanner) (*ProgramItem, error) {
