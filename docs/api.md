@@ -223,12 +223,13 @@ Create a new timed session.
 GET /api/v1/sessions/:id
 ```
 
-Retrieve current session state. No authentication required (read-only).
+Retrieve current runtime envelope. No authentication required (read-only).
 
 **Response (200):**
 
 ```json
 {
+  "type": "SESSION_SNAPSHOT",
   "session": {
     "id": "sess_abc123",
     "title": "Engineering Talks Q&A",
@@ -237,7 +238,9 @@ Retrieve current session state. No authentication required (read-only).
     "status": "LIVE",
     "remainingSeconds": 450,
     "createdAt": "2025-12-15T10:30:00Z"
-  }
+  },
+  "programItem": null,
+  "nextProgramItem": null
 }
 ```
 
@@ -262,6 +265,8 @@ Read endpoints require bearer authorization only.
 
 ### ProgramItem Shape
 
+Base scheduling fields:
+
 ```json
 {
   "id": "pi_abc123",
@@ -285,8 +290,11 @@ Read endpoints require bearer authorization only.
 
 - `scheduled`
 - `in_progress`
+- `paused`
 - `ended`
 - `canceled`
+
+Runtime fields for active contract (`runtimeDurationSeconds`, `remainingSeconds`, `actualStart`, `pausedAt`, `totalPausedDurationSeconds`, `adjustmentSeconds`, `endedRemainingSeconds`, `actualEnd`, `pauseCount`, `endedReason`) are documented in Runtime Contract Update above.
 
 ### List ProgramItems
 
@@ -304,6 +312,7 @@ GET /api/v1/sessions/:id/current-program-item
 ```
 
 Returns current and next ProgramItem context for the supplied timestamp on the server.
+This endpoint is retained as a compatibility read endpoint; primary viewer sync should consume `GET /api/v1/sessions/:id` unified runtime envelope and websocket runtime updates.
 
 Selection behavior:
 
