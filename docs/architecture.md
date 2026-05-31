@@ -279,13 +279,22 @@ Control endpoints require valid `X-Control-Token`:
 
 Public session read endpoints (`GET /api/v1/sessions/:id`, `GET /ws/sessions/:id`) require no auth.
 
+The user viewer also uses `GET /api/v1/sessions/:id/current-program-item` as a public read endpoint.
+
 ProgramItem mutations require both bearer authorization and session control token.
 
 ---
 
-## ProgramItem Scheduling Model (Phase 1 Contract)
+## ProgramItem Scheduling Model (Runtime Contract)
 
 ProgramItems are session-scoped timeline blocks with explicit position ordering.
+
+ProgramItem statuses:
+
+- `scheduled`
+- `in_progress`
+- `ended`
+- `canceled`
 
 Core rules:
 
@@ -313,6 +322,33 @@ ProgramItem deletion is represented as cancellation:
 4. Viewer context may auto-advance to next non-canceled item.
 
 This preserves timeline history for future metrics and audit trails.
+
+### Current ProgramItem (Viewer Context)
+
+Viewer context is server-derived and exposed as:
+
+```json
+{
+  "programItem": { "...": "current item or null" },
+  "nextProgramItem": { "...": "next item or null" }
+}
+```
+
+Selection policy:
+
+1. Prefer explicit `in_progress` item as current.
+2. If none is in progress, derive current from scheduled window (`start <= now < end`) among `scheduled` items.
+3. Derive next as first upcoming non-canceled scheduled item.
+
+This keeps both admin and user interfaces synchronized even when runtime transitions are manually controlled.
+
+Viewer context resolves the active timeline item from backend logic:
+
+1. Include only `scheduled` items.
+2. Select item where `scheduledStart <= now < scheduledEnd`.
+3. Return `null` when no active item exists.
+
+This logic is exposed by `GET /api/v1/sessions/:id/current-program-item`.
 
 ---
 
@@ -357,6 +393,8 @@ User App                              Backend
   │                                     │
   ├─ GET /api/v1/sessions/:id ────────►│
   │◄─ 200 + session snapshot ──────────│
+  ├─ GET /api/v1/sessions/:id/current-program-item ───────────►│
+  │◄─ 200 + { programItem | null } ────────────────────────────│
   │                                     │
   ├─ Upgrade to WebSocket──────────────►│
   │                                      │ Send snapshot
@@ -370,8 +408,10 @@ User App                              Backend
   ├─ Tick ──────────► Decrement time     │
   │                                      │
   │◄─ SESSION_UPDATE (from host action)─│
+  │◄─ PROGRAM_ITEM_* event ─────────────│
   │                                      │
   ├─ Replace snapshot (re-sync)          │
+  ├─ Refresh current ProgramItem          │
   ├─ Restart local tick                  │
   │                                      │
 ```

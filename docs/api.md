@@ -166,6 +166,8 @@ Read endpoints require bearer authorization only.
 `status` values:
 
 - `scheduled`
+- `in_progress`
+- `ended`
 - `canceled`
 
 ### List ProgramItems
@@ -176,6 +178,69 @@ Authorization: Bearer <token>
 ```
 
 Returns ordered timeline items for a session, including canceled items.
+
+### Get Current ProgramItem (Public Viewer)
+
+```
+GET /api/v1/sessions/:id/current-program-item
+```
+
+Returns current and next ProgramItem context for the supplied timestamp on the server.
+
+Selection behavior:
+
+- current selection prefers an `in_progress` item when one exists
+- otherwise current is derived from scheduled window `scheduledStart <= now < scheduledEnd`
+- next selection returns the first non-canceled upcoming scheduled item
+- returns `null` fields when no matching item exists
+
+Response body:
+
+```json
+{
+  "programItem": {
+    "id": "pi_abc123",
+    "sessionId": "sess_abc123",
+    "title": "Panel Discussion",
+    "type": "panel",
+    "status": "scheduled",
+    "hostName": "Alice Johnson",
+    "scheduledStart": "2026-05-28T10:20:00Z",
+    "scheduledEnd": "2026-05-28T10:40:00Z",
+    "expectedDurationMinutes": 20,
+    "position": 4,
+    "location": "Main Hall",
+    "metadata": { "track": "engineering" },
+    "createdAt": "2026-05-28T09:00:00Z",
+    "updatedAt": "2026-05-28T09:00:00Z"
+  },
+  "nextProgramItem": {
+    "id": "pi_def456",
+    "sessionId": "sess_abc123",
+    "title": "Q&A",
+    "type": "q&a",
+    "status": "scheduled",
+    "hostName": "Alice Johnson",
+    "scheduledStart": "2026-05-28T10:40:00Z",
+    "scheduledEnd": "2026-05-28T10:50:00Z",
+    "expectedDurationMinutes": 10,
+    "position": 5,
+    "location": "Main Hall",
+    "metadata": { "track": "engineering" },
+    "createdAt": "2026-05-28T09:00:00Z",
+    "updatedAt": "2026-05-28T09:00:00Z"
+  }
+}
+```
+
+When no active item exists:
+
+```json
+{
+  "programItem": null,
+  "nextProgramItem": null
+}
+```
 
 ### Create ProgramItem
 
@@ -442,6 +507,18 @@ When the host changes session state (start, pause, resume, end, adjust), all con
   }
 }
 ```
+
+### ProgramItem Update (on timeline change)
+
+When ProgramItems are created, updated, canceled, or reordered, all connected clients receive one of:
+
+- `PROGRAM_ITEM_CREATED`
+- `PROGRAM_ITEM_UPDATED`
+- `PROGRAM_ITEM_CANCELED`
+- `PROGRAM_ITEMS_REORDERED`
+
+User viewers should treat these as refresh triggers for
+`GET /api/v1/sessions/:id/current-program-item` to stay aligned with server-side item selection.
 
 ---
 
