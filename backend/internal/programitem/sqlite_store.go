@@ -46,6 +46,15 @@ func (s *SqliteStore) runMigrations() error {
 		title TEXT NOT NULL,
 		type TEXT NOT NULL,
 		status TEXT NOT NULL,
+		runtime_duration_seconds INTEGER NOT NULL DEFAULT 0,
+		actual_start TEXT,
+		paused_at TEXT,
+		total_paused_duration_seconds INTEGER NOT NULL DEFAULT 0,
+		adjustment_seconds INTEGER NOT NULL DEFAULT 0,
+		ended_remaining_seconds INTEGER,
+		actual_end TEXT,
+		pause_count INTEGER NOT NULL DEFAULT 0,
+		ended_reason TEXT,
 		host_name TEXT,
 		scheduled_start TEXT NOT NULL,
 		scheduled_end TEXT NOT NULL,
@@ -66,8 +75,75 @@ func (s *SqliteStore) runMigrations() error {
 	WHERE status = 'in_progress';
 	`
 
-	_, err := s.db.Exec(query)
-	return err
+	if _, err := s.db.Exec(query); err != nil {
+		return err
+	}
+
+	return s.ensureRuntimeColumns()
+}
+
+func (s *SqliteStore) ensureRuntimeColumns() error {
+	type runtimeColumn struct {
+		name      string
+		addClause string
+	}
+
+	columns := []runtimeColumn{
+		{name: "runtime_duration_seconds", addClause: "runtime_duration_seconds INTEGER NOT NULL DEFAULT 0"},
+		{name: "actual_start", addClause: "actual_start TEXT"},
+		{name: "paused_at", addClause: "paused_at TEXT"},
+		{name: "total_paused_duration_seconds", addClause: "total_paused_duration_seconds INTEGER NOT NULL DEFAULT 0"},
+		{name: "adjustment_seconds", addClause: "adjustment_seconds INTEGER NOT NULL DEFAULT 0"},
+		{name: "ended_remaining_seconds", addClause: "ended_remaining_seconds INTEGER"},
+		{name: "actual_end", addClause: "actual_end TEXT"},
+		{name: "pause_count", addClause: "pause_count INTEGER NOT NULL DEFAULT 0"},
+		{name: "ended_reason", addClause: "ended_reason TEXT"},
+	}
+
+	for _, column := range columns {
+		exists, err := s.columnExists("program_items", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+
+		if _, err = s.db.Exec("ALTER TABLE program_items ADD COLUMN " + column.addClause); err != nil {
+			return fmt.Errorf("failed adding column %s: %w", column.name, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *SqliteStore) columnExists(tableName string, columnName string) (bool, error) {
+	rows, err := s.db.Query("PRAGMA table_info(" + tableName + ")")
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect table %s: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err = rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, fmt.Errorf("failed reading table info for %s: %w", tableName, err)
+		}
+		if name == columnName {
+			return true, nil
+		}
+	}
+
+	if err = rows.Err(); err != nil {
+		return false, fmt.Errorf("failed iterating table info for %s: %w", tableName, err)
+	}
+
+	return false, nil
 }
 
 func (s *SqliteStore) Create(item *ProgramItem) (*ProgramItem, error) {
@@ -104,16 +180,28 @@ func (s *SqliteStore) Create(item *ProgramItem) (*ProgramItem, error) {
 
 	_, err = tx.Exec(`
 		INSERT INTO program_items (
-			id, session_id, title, type, status, host_name,
+			id, session_id, title, type, status, runtime_duration_seconds,
+			actual_start, paused_at, total_paused_duration_seconds,
+			adjustment_seconds, ended_remaining_seconds, actual_end,
+			pause_count, ended_reason, host_name,
 			scheduled_start, scheduled_end, expected_duration_minutes,
 			position, location, metadata, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		item.ID,
 		item.SessionID,
 		item.Title,
 		item.Type,
 		item.Status,
+		item.RuntimeDurationSeconds,
+		timePtrToSQL(item.ActualStart),
+		timePtrToSQL(item.PausedAt),
+		item.TotalPausedDurationSeconds,
+		item.AdjustmentSeconds,
+		intPtrToSQL(item.EndedRemainingSeconds),
+		timePtrToSQL(item.ActualEnd),
+		item.PauseCount,
+		nullableStringToSQL(item.EndedReason),
 		item.HostName,
 		item.ScheduledStart.Format(time.RFC3339),
 		item.ScheduledEnd.Format(time.RFC3339),
@@ -137,7 +225,10 @@ func (s *SqliteStore) Create(item *ProgramItem) (*ProgramItem, error) {
 
 func (s *SqliteStore) Get(id string) (*ProgramItem, error) {
 	row := s.db.QueryRow(`
-		SELECT id, session_id, title, type, status, host_name,
+		SELECT id, session_id, title, type, status, runtime_duration_seconds,
+		       actual_start, paused_at, total_paused_duration_seconds,
+		       adjustment_seconds, ended_remaining_seconds, actual_end,
+		       pause_count, ended_reason, host_name,
 		       scheduled_start, scheduled_end, expected_duration_minutes,
 		       position, location, metadata, created_at, updated_at
 		FROM program_items
@@ -157,7 +248,10 @@ func (s *SqliteStore) Get(id string) (*ProgramItem, error) {
 
 func (s *SqliteStore) ListBySession(sessionID string) ([]*ProgramItem, error) {
 	rows, err := s.db.Query(`
-		SELECT id, session_id, title, type, status, host_name,
+		SELECT id, session_id, title, type, status, runtime_duration_seconds,
+		       actual_start, paused_at, total_paused_duration_seconds,
+		       adjustment_seconds, ended_remaining_seconds, actual_end,
+		       pause_count, ended_reason, host_name,
 		       scheduled_start, scheduled_end, expected_duration_minutes,
 		       position, location, metadata, created_at, updated_at
 		FROM program_items
@@ -224,6 +318,15 @@ func (s *SqliteStore) Update(item *ProgramItem) error {
 		SET title = ?,
 		    type = ?,
 		    status = ?,
+		    runtime_duration_seconds = ?,
+		    actual_start = ?,
+		    paused_at = ?,
+		    total_paused_duration_seconds = ?,
+		    adjustment_seconds = ?,
+		    ended_remaining_seconds = ?,
+		    actual_end = ?,
+		    pause_count = ?,
+		    ended_reason = ?,
 		    host_name = ?,
 		    scheduled_start = ?,
 		    scheduled_end = ?,
@@ -237,6 +340,15 @@ func (s *SqliteStore) Update(item *ProgramItem) error {
 		item.Title,
 		item.Type,
 		item.Status,
+		item.RuntimeDurationSeconds,
+		timePtrToSQL(item.ActualStart),
+		timePtrToSQL(item.PausedAt),
+		item.TotalPausedDurationSeconds,
+		item.AdjustmentSeconds,
+		intPtrToSQL(item.EndedRemainingSeconds),
+		timePtrToSQL(item.ActualEnd),
+		item.PauseCount,
+		nullableStringToSQL(item.EndedReason),
 		item.HostName,
 		item.ScheduledStart.Format(time.RFC3339),
 		item.ScheduledEnd.Format(time.RFC3339),
@@ -304,9 +416,10 @@ func (s *SqliteStore) TransitionToInProgress(id string, at time.Time) (*ProgramI
 	now := at.UTC().Format(time.RFC3339)
 	result, err := tx.Exec(`
 		UPDATE program_items
-		SET status = ?, updated_at = ?
+		SET status = ?, actual_start = ?, paused_at = NULL, actual_end = NULL,
+		    ended_remaining_seconds = NULL, updated_at = ?
 		WHERE id = ? AND status = ?
-	`, StatusInProgress, now, id, StatusScheduled)
+	`, StatusInProgress, now, now, id, StatusScheduled)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition program item to in_progress: %w", err)
 	}
@@ -322,9 +435,6 @@ func (s *SqliteStore) TransitionToInProgress(id string, at time.Time) (*ProgramI
 	if err != nil {
 		return nil, err
 	}
-	atUTC := at.UTC()
-	updated.ActualStart = &atUTC
-	updated.ActualEnd = nil
 
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transition transaction: %w", err)
@@ -354,9 +464,9 @@ func (s *SqliteStore) TransitionToEnded(id string, at time.Time) (*ProgramItem, 
 	now := at.UTC().Format(time.RFC3339)
 	result, err := tx.Exec(`
 		UPDATE program_items
-		SET status = ?, updated_at = ?
+		SET status = ?, actual_end = ?, paused_at = NULL, updated_at = ?
 		WHERE id = ? AND status = ?
-	`, StatusEnded, now, id, StatusInProgress)
+	`, StatusEnded, now, now, id, StatusInProgress)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition program item to ended: %w", err)
 	}
@@ -372,11 +482,6 @@ func (s *SqliteStore) TransitionToEnded(id string, at time.Time) (*ProgramItem, 
 	if err != nil {
 		return nil, err
 	}
-	atUTC := at.UTC()
-	if updated.ActualStart == nil {
-		updated.ActualStart = &atUTC
-	}
-	updated.ActualEnd = &atUTC
 
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transition transaction: %w", err)
@@ -557,7 +662,10 @@ type queryRowScanner interface {
 
 func txGetProgramItem(q queryRowScanner, id string) (*ProgramItem, error) {
 	row := q.QueryRow(`
-		SELECT id, session_id, title, type, status, host_name,
+		SELECT id, session_id, title, type, status, runtime_duration_seconds,
+		       actual_start, paused_at, total_paused_duration_seconds,
+		       adjustment_seconds, ended_remaining_seconds, actual_end,
+		       pause_count, ended_reason, host_name,
 		       scheduled_start, scheduled_end, expected_duration_minutes,
 		       position, location, metadata, created_at, updated_at
 		FROM program_items
@@ -578,6 +686,11 @@ func txGetProgramItem(q queryRowScanner, id string) (*ProgramItem, error) {
 func scanProgramItem(s scanner) (*ProgramItem, error) {
 	var item ProgramItem
 	var metadataRaw sql.NullString
+	var actualStartRaw sql.NullString
+	var pausedAtRaw sql.NullString
+	var endedRemainingRaw sql.NullInt64
+	var actualEndRaw sql.NullString
+	var endedReasonRaw sql.NullString
 	var scheduledStartRaw string
 	var scheduledEndRaw string
 	var createdAtRaw string
@@ -589,6 +702,15 @@ func scanProgramItem(s scanner) (*ProgramItem, error) {
 		&item.Title,
 		&item.Type,
 		&item.Status,
+		&item.RuntimeDurationSeconds,
+		&actualStartRaw,
+		&pausedAtRaw,
+		&item.TotalPausedDurationSeconds,
+		&item.AdjustmentSeconds,
+		&endedRemainingRaw,
+		&actualEndRaw,
+		&item.PauseCount,
+		&endedReasonRaw,
 		&item.HostName,
 		&scheduledStartRaw,
 		&scheduledEndRaw,
@@ -616,6 +738,23 @@ func scanProgramItem(s scanner) (*ProgramItem, error) {
 		return nil, fmt.Errorf("failed to parse updated_at: %w", err)
 	}
 
+	if item.ActualStart, err = timePtrFromSQL(actualStartRaw); err != nil {
+		return nil, fmt.Errorf("failed to parse actual_start: %w", err)
+	}
+	if item.PausedAt, err = timePtrFromSQL(pausedAtRaw); err != nil {
+		return nil, fmt.Errorf("failed to parse paused_at: %w", err)
+	}
+	if item.ActualEnd, err = timePtrFromSQL(actualEndRaw); err != nil {
+		return nil, fmt.Errorf("failed to parse actual_end: %w", err)
+	}
+	if endedRemainingRaw.Valid {
+		value := int(endedRemainingRaw.Int64)
+		item.EndedRemainingSeconds = &value
+	}
+	if endedReasonRaw.Valid {
+		item.EndedReason = strings.TrimSpace(endedReasonRaw.String)
+	}
+
 	if metadataRaw.Valid && strings.TrimSpace(metadataRaw.String) != "" {
 		if err = json.Unmarshal([]byte(metadataRaw.String), &item.Metadata); err != nil {
 			return nil, fmt.Errorf("failed to parse metadata: %w", err)
@@ -623,6 +762,39 @@ func scanProgramItem(s scanner) (*ProgramItem, error) {
 	}
 
 	return &item, nil
+}
+
+func timePtrToSQL(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func timePtrFromSQL(value sql.NullString) (*time.Time, error) {
+	if !value.Valid || strings.TrimSpace(value.String) == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value.String)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
+func intPtrToSQL(value *int) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func nullableStringToSQL(value string) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }
 
 func metadataToJSON(metadata map[string]any) (string, error) {

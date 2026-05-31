@@ -134,6 +134,8 @@ func (ms *MemoryStore) TransitionToInProgress(id string, at time.Time) (*Program
 	now := at.UTC()
 	item.Status = StatusInProgress
 	item.ActualStart = &now
+	item.PausedAt = nil
+	item.EndedRemainingSeconds = nil
 	item.ActualEnd = nil
 	item.UpdatedAt = now
 
@@ -165,6 +167,7 @@ func (ms *MemoryStore) TransitionToEnded(id string, at time.Time) (*ProgramItem,
 	if item.ActualStart == nil {
 		item.ActualStart = &now
 	}
+	item.PausedAt = nil
 	item.ActualEnd = &now
 	item.UpdatedAt = now
 
