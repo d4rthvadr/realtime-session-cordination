@@ -1,64 +1,93 @@
 package main
 
 import (
-	"log"
 	"os"
 
 	"realtime-session-coordination/backend/internal/api"
+	"realtime-session-coordination/backend/internal/auth"
+	"realtime-session-coordination/backend/internal/config"
+	"realtime-session-coordination/backend/internal/logging"
+	"realtime-session-coordination/backend/internal/programitem"
 	"realtime-session-coordination/backend/internal/session"
+	"realtime-session-coordination/backend/internal/user"
 	"realtime-session-coordination/backend/internal/ws"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
-// initStore creates the appropriate Store implementation based on DB_DRIVER env var
-func initStore() (session.Store, error) {
-	dbDriver := os.Getenv("DB_DRIVER")
-	if dbDriver == "" {
-		dbDriver = "sqlite"
-	}
-
-	switch dbDriver {
+// initStores creates the appropriate session, program item, and user stores based on DB_DRIVER env var.
+func initStores(cfg config.Config) (session.Store, programitem.Store, user.Store, error) {
+	switch cfg.DBDriver {
 	case "memory":
-		return session.NewMemoryStore(), nil
+		sessionStore := session.NewMemoryStore()
+		return sessionStore, programitem.NewMemoryStore(sessionStore.SessionExists), user.NewMemoryStore(), nil
 	case "sqlite":
-		dbPath := os.Getenv("SQLITE_DB_PATH")
-		if dbPath == "" {
-			dbPath = "./sessions.db"
+		sessionStore, err := session.NewSqliteStore(cfg.SqliteDBPath)
+		if err != nil {
+			return nil, nil, nil, err
 		}
-		return session.NewSqliteStore(dbPath)
+
+		programItemStore, err := programitem.NewSqliteStore(cfg.SqliteDBPath)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		userStore, err := user.NewSqliteStore(cfg.SqliteDBPath)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		return sessionStore, programItemStore, userStore, nil
 	default:
-		log.Fatalf("unknown DB_DRIVER: %s (must be 'memory' or 'sqlite')", dbDriver)
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 }
 
 func main() {
+	bootstrapLogger := logging.Default()
+
 	if err := godotenv.Load(); err != nil {
-		log.Printf(".env not loaded: %v", err)
+		bootstrapLogger.Warn("env_file_not_loaded", "error", err)
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	store, err := initStore()
+	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatalf("failed to initialize store: %v", err)
+		bootstrapLogger.Error("invalid_configuration", "error", err)
+		os.Exit(1)
+	}
+
+	logger, err := logging.New(cfg.LogLevel, cfg.LogFormat)
+	if err != nil {
+		bootstrapLogger.Error("invalid_logging_configuration", "error", err)
+		os.Exit(1)
+	}
+	appLogger := logger.With("component", "api_server")
+
+	store, programItemStore, userStore, err := initStores(cfg)
+	if err != nil {
+		appLogger.Error("store_initialization_failed", "error", err)
+		os.Exit(1)
+	}
+
+	authService, err := auth.NewService(userStore, cfg.JWTSecret, cfg.JWTExpiry, cfg.JWTIssuer)
+	if err != nil {
+		appLogger.Error("auth_service_initialization_failed", "error", err)
+		os.Exit(1)
 	}
 
 	manager := session.NewManager(store)
-	hub := ws.NewHub()
-	handler := api.NewHandler(manager, hub)
+	programItemManager := programitem.NewManager(programItemStore)
+	hub := ws.NewHub(logger)
+	handler := api.NewHandler(manager, programItemManager, hub, authService, logger)
 
 	router := gin.New()
-	router.Use(gin.Logger(), gin.Recovery(), api.CORSMiddleware())
+	router.Use(gin.Recovery(), api.CORSMiddleware(), api.RequestLoggingMiddleware(logger))
 	handler.RegisterRoutes(router)
 
-	log.Printf("backend listening on :%s", port)
-	if err := router.Run(":" + port); err != nil {
-		log.Fatalf("server failed: %v", err)
+	appLogger.Info("backend_starting", "port", cfg.Port, "db_driver", cfg.DBDriver)
+	if err := router.Run(":" + cfg.Port); err != nil {
+		appLogger.Error("server_failed", "error", err)
+		os.Exit(1)
 	}
 }

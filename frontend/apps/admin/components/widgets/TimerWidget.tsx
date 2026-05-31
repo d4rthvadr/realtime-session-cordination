@@ -1,0 +1,96 @@
+"use client";
+
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Pause, RefreshCw } from "lucide-react";
+
+interface TimerWidgetProps {
+  currentTime: string;
+  totalTime: string;
+  progress: number;
+  status: "CREATED" | "LIVE" | "PAUSED" | "ENDED";
+  onPause?: () => void;
+  onRefresh?: () => void;
+}
+
+export default function TimerWidget({
+  currentTime,
+  totalTime,
+  progress,
+  status,
+  onPause,
+  onRefresh,
+}: TimerWidgetProps) {
+  const getStatusLabel = () => {
+    switch (status) {
+      case "LIVE":
+        return "LIVE SESSION";
+      case "PAUSED":
+        return "PAUSED";
+      case "ENDED":
+        return "ENDED";
+      default:
+        return "READY";
+    }
+  };
+
+  const getStatusVariant = () => {
+    switch (status) {
+      case "LIVE":
+        return "default" as const;
+      case "PAUSED":
+        return "warning" as const;
+      case "ENDED":
+        return "secondary" as const;
+      default:
+        return "success" as const;
+    }
+  };
+
+  return (
+    <Card className="col-span-12 md:col-span-8 p-4 md:p-6 flex flex-col justify-between">
+      <div className="flex justify-between items-start">
+        <Badge variant={getStatusVariant()} className="tracking-wider">
+          {getStatusLabel()}
+        </Badge>
+        <div className="flex gap-2">
+          {onPause && status === "LIVE" && (
+            <Button
+              onClick={onPause}
+              variant="ghost"
+              size="icon"
+              aria-label="Pause session"
+              className="rounded-full"
+            >
+              <Pause className="w-5 h-5" />
+            </Button>
+          )}
+          {onRefresh && (
+            <Button
+              onClick={onRefresh}
+              variant="ghost"
+              size="icon"
+              aria-label="Refresh session"
+              className="rounded-full"
+            >
+              <RefreshCw className="w-5 h-5" />
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-baseline justify-center py-6 md:py-10">
+        <span className="text-5xl sm:text-7xl md:text-8xl lg:text-9xl font-bold leading-none tracking-tighter">
+          {currentTime}
+        </span>
+        <span className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-semibold text-muted-foreground ml-2 md:ml-4">
+          / {totalTime}
+        </span>
+      </div>
+
+      <Progress value={Math.min(100, Math.max(0, progress))} className="h-2" />
+    </Card>
+  );
+}

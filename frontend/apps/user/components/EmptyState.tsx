@@ -1,4 +1,6 @@
 import Image from "next/image";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 
 interface EmptyStateProps {
   title: string;
@@ -13,49 +15,55 @@ export default function EmptyState({
   description,
   actionText,
   onAction,
-  isDark = true,
+  isDark = false,
 }: EmptyStateProps) {
   return (
-    <div
-      className={`flex flex-col items-center justify-center rounded-2xl border p-12 shadow-sm ${
+    <Card
+      className={
         isDark
-          ? "border-slate-800 bg-slate-900/70 backdrop-blur"
+          ? "border-slate-800 bg-slate-900/70 text-slate-100"
           : "border-slate-200 bg-white"
-      }`}
+      }
     >
-      <div className="relative h-48 w-64">
-        <Image
-          src="/images/session-not-found-empty-state.svg"
-          alt="Empty state"
-          fill
-          className="object-contain"
-          priority
-        />
-      </div>
+      <CardContent className="flex flex-col items-center justify-center p-8 text-center sm:p-12">
+        <div className="relative h-40 w-56 sm:h-48 sm:w-64">
+          <Image
+            src="/images/session-not-found-empty-state.svg"
+            alt="Empty state"
+            fill
+            className="object-contain"
+            priority
+          />
+        </div>
 
-      <h3
-        className={`mt-6 text-xl font-semibold ${isDark ? "text-slate-100" : "text-slate-900"}`}
-      >
-        {title}
-      </h3>
-      <p
-        className={`mt-2 text-center ${isDark ? "text-slate-300" : "text-slate-600"}`}
-      >
-        {description}
-      </p>
-
-      {actionText && onAction && (
-        <button
-          onClick={onAction}
-          className={`mt-6 rounded-md px-4 py-2 text-sm font-medium transition ${
-            isDark
-              ? "border border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700"
-              : "bg-slate-900 text-white hover:bg-slate-700"
+        <h3
+          className={`mt-6 text-xl font-semibold ${
+            isDark ? "text-slate-100" : "text-slate-900"
           }`}
         >
-          {actionText}
-        </button>
-      )}
-    </div>
+          {title}
+        </h3>
+        <p
+          className={`mt-2 max-w-2xl ${
+            isDark ? "text-slate-400" : "text-slate-600"
+          }`}
+        >
+          {description}
+        </p>
+
+        {actionText && onAction && (
+          <Button
+            onClick={onAction}
+            className={
+              isDark
+                ? "mt-6 bg-slate-100 text-slate-900 hover:bg-white"
+                : "mt-6"
+            }
+          >
+            {actionText}
+          </Button>
+        )}
+      </CardContent>
+    </Card>
   );
 }

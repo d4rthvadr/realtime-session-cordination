@@ -2,7 +2,11 @@
 
 import { useEffect } from "react";
 import { buildUserApiUrl, buildUserWsUrl } from "@/lib/backend";
-import { useSessionStore, type SessionSnapshot } from "@/store/sessionStore";
+import {
+  useSessionStore,
+  type ProgramItemSnapshot,
+  type SessionSnapshot,
+} from "@/store/sessionStore";
 
 interface BackendSessionSnapshot {
   id: string;
@@ -18,6 +22,18 @@ interface BackendSessionResponse {
   session: BackendSessionSnapshot;
 }
 
+interface BackendCurrentProgramItemResponse {
+  programItem: ProgramItemSnapshot | null;
+  nextProgramItem?: ProgramItemSnapshot | null;
+}
+
+interface BackendProgramItemMessage {
+  type?: string;
+  session?: BackendSessionResponse["session"];
+  programItem?: ProgramItemSnapshot | null;
+  nextProgramItem?: ProgramItemSnapshot | null;
+}
+
 function normalizeSnapshot(snapshot: BackendSessionSnapshot): SessionSnapshot {
   return {
     title: snapshot.title,
@@ -31,6 +47,10 @@ function normalizeSnapshot(snapshot: BackendSessionSnapshot): SessionSnapshot {
 
 export function useSessionSocket(sessionId: string): void {
   const setSnapshot = useSessionStore((state) => state.setSnapshot);
+  const setCurrentProgramItem = useSessionStore(
+    (state) => state.setCurrentProgramItem,
+  );
+  const setNextProgramItem = useSessionStore((state) => state.setNextProgramItem);
   const setConnectionState = useSessionStore(
     (state) => state.setConnectionState,
   );
@@ -43,8 +63,30 @@ export function useSessionSocket(sessionId: string): void {
     let cancelled = false;
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let currentItemRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
     resetSession();
+
+    const refreshCurrentProgramItem = async () => {
+      try {
+        const response = await fetch(
+          buildUserApiUrl(`/api/v1/sessions/${sessionId}/current-program-item`),
+        );
+
+        if (!response.ok) {
+          return;
+        }
+
+        const payload =
+          (await response.json()) as BackendCurrentProgramItemResponse;
+        if (!cancelled) {
+          setCurrentProgramItem(payload.programItem ?? null);
+          setNextProgramItem(payload.nextProgramItem ?? null);
+        }
+      } catch {
+        // Ignore refresh failures and keep last known value.
+      }
+    };
 
     const connect = async () => {
       setConnectionState("connecting");
@@ -69,6 +111,7 @@ export function useSessionSocket(sessionId: string): void {
         if (!cancelled) {
           setSessionNotFound(false);
           setSnapshot(normalizeSnapshot(payload.session));
+          await refreshCurrentProgramItem();
         }
 
         const wsUrl = buildUserWsUrl(`/ws/sessions/${sessionId}`);
@@ -86,13 +129,33 @@ export function useSessionSocket(sessionId: string): void {
           }
 
           try {
-            const message = JSON.parse(String(event.data)) as {
-              type?: string;
-              session?: BackendSessionResponse["session"];
-            };
+            const message = JSON.parse(String(event.data)) as BackendProgramItemMessage;
 
             if (message.session) {
               setSnapshot(normalizeSnapshot(message.session));
+              void refreshCurrentProgramItem();
+              return;
+            }
+
+            if (
+              message.type === "PROGRAM_ITEM_STARTED" ||
+              message.type === "PROGRAM_ITEM_ENDED"
+            ) {
+              setCurrentProgramItem(message.programItem ?? null);
+              setNextProgramItem(message.nextProgramItem ?? null);
+              void refreshCurrentProgramItem();
+              return;
+            }
+
+            if (
+              message.type === "PROGRAM_ITEM_CREATED" ||
+              message.type === "PROGRAM_ITEM_UPDATED" ||
+              message.type === "PROGRAM_ITEM_CANCELED" ||
+              message.type === "PROGRAM_ITEM_STARTED" ||
+              message.type === "PROGRAM_ITEM_ENDED" ||
+              message.type === "PROGRAM_ITEMS_REORDERED"
+            ) {
+              void refreshCurrentProgramItem();
               return;
             }
           } catch {
@@ -118,6 +181,10 @@ export function useSessionSocket(sessionId: string): void {
             setConnectionState("disconnected");
           }
         };
+
+        currentItemRefreshTimer = setInterval(() => {
+          void refreshCurrentProgramItem();
+        }, 15000);
       } catch {
         if (!cancelled) {
           setConnectionState("disconnected");
@@ -132,6 +199,9 @@ export function useSessionSocket(sessionId: string): void {
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
       }
+      if (currentItemRefreshTimer) {
+        clearInterval(currentItemRefreshTimer);
+      }
       if (socket) {
         socket.close();
       }
@@ -139,6 +209,8 @@ export function useSessionSocket(sessionId: string): void {
   }, [
     resetSession,
     sessionId,
+    setCurrentProgramItem,
+    setNextProgramItem,
     setConnectionState,
     setSessionNotFound,
     setSnapshot,

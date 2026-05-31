@@ -11,3 +11,32 @@ This folder contains the standalone Go backend service for realtime session coor
 ## Status
 
 Scaffold initialized. API and WebSocket implementation will be added in the next tasks.
+
+## Logging
+
+Backend logging uses structured logs via Go `slog`.
+
+## Development
+
+Use Air for backend hot reload during local development.
+
+```bash
+make install-air
+make backend
+```
+
+`make backend` runs Air with [backend/.air.toml](backend/.air.toml), rebuilding and restarting the API when Go files under `cmd/` or `internal/` change.
+
+### Environment Variables
+
+- `LOG_LEVEL`: `debug` | `info` | `warn` | `error` (default: `info`)
+- `LOG_FORMAT`: `json` | `text` (default: `json`)
+
+### Correlation (`request_id`)
+
+- Every HTTP request is assigned a request ID.
+- If the client sends `X-Request-ID`, that value is reused.
+- If absent, the server generates a value like `req_<hex>`.
+- The request ID is returned in the response header `X-Request-ID`.
+- Access logs include `request_id`.
+- Related WebSocket error logs emitted during request handling include `request_id` when available.

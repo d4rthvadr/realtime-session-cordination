@@ -1,10 +1,11 @@
-.PHONY: help backend run-backend frontend-user run-user frontend-admin run-admin install build dev
+.PHONY: help backend run-backend frontend-user run-user frontend-admin run-admin install install-air build dev
 
 help:
 	@echo "Realtime Session Coordination - Available Commands"
 	@echo ""
 	@echo "Setup:"
 	@echo "  make install          Install all dependencies (npm + go)"
+	@echo "  make install-air      Install Air for backend hot reload"
 	@echo "  make build            Build all apps (frontend + backend)"
 	@echo ""
 	@echo "Development:"
@@ -28,6 +29,11 @@ install:
 	cd backend && go mod download
 	@echo "✓ Dependencies installed"
 
+install-air:
+	@echo "Installing Air..."
+	cd backend && go install github.com/air-verse/air@latest
+	@echo "✓ Air installed"
+
 build:
 	@echo "Building frontend apps..."
 	cd frontend && npm run build -w @realtime/user
@@ -38,8 +44,13 @@ build:
 
 backend: run-backend
 run-backend:
-	@echo "Starting backend on :8080..."
-	cd backend && go run ./cmd/api
+	@echo "Starting backend with Air on :8080..."
+	@if command -v air >/dev/null 2>&1; then \
+		cd backend && air -c .air.toml; \
+	else \
+		echo "Air is not installed. Run 'make install-air' first."; \
+		exit 1; \
+	fi
 
 frontend-user: run-user
 run-user:

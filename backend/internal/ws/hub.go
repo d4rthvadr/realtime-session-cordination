@@ -1,9 +1,11 @@
 package ws
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 	"time"
+
+	"realtime-session-coordination/backend/internal/logging"
 
 	"github.com/gorilla/websocket"
 )
@@ -11,10 +13,19 @@ import (
 type Hub struct {
 	mu      sync.Mutex
 	clients map[string]map[*websocket.Conn]struct{}
+	logger  *slog.Logger
 }
 
-func NewHub() *Hub {
-	return &Hub{clients: make(map[string]map[*websocket.Conn]struct{})}
+func NewHub(logger *slog.Logger) *Hub {
+	if logger == nil {
+		logger = logging.Default()
+	}
+	logger = logger.With("component", "ws_hub")
+
+	return &Hub{
+		clients: make(map[string]map[*websocket.Conn]struct{}),
+		logger:  logger,
+	}
 }
 
 func (h *Hub) Register(sessionID string, conn *websocket.Conn) {
@@ -41,6 +52,10 @@ func (h *Hub) Unregister(sessionID string, conn *websocket.Conn) {
 }
 
 func (h *Hub) Broadcast(sessionID string, payload any) {
+	h.BroadcastWithRequestID(sessionID, payload, "")
+}
+
+func (h *Hub) BroadcastWithRequestID(sessionID string, payload any, requestID string) {
 	h.mu.Lock()
 	clients, ok := h.clients[sessionID]
 	if !ok {
@@ -57,7 +72,11 @@ func (h *Hub) Broadcast(sessionID string, payload any) {
 	for _, conn := range conns {
 		_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if err := conn.WriteJSON(payload); err != nil {
-			log.Printf("ws write failed for session=%s: %v", sessionID, err)
+			if requestID != "" {
+				h.logger.Error("ws_write_failed", "session_id", sessionID, "request_id", requestID, "error", err)
+			} else {
+				h.logger.Error("ws_write_failed", "session_id", sessionID, "error", err)
+			}
 			h.Unregister(sessionID, conn)
 		}
 	}

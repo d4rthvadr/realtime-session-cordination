@@ -438,16 +438,13 @@ Next.js hot-reloads on file changes automatically.
 
 ```bash
 # Terminal 3: Watch backend
-cd backend
-go run ./cmd/api
+make backend
 ```
 
-To auto-reload on changes, use **air** or **nodemon** equivalents:
+If Air is not installed yet:
 
 ```bash
-go install github.com/cosmtrek/air@latest
-cd backend
-air
+make install-air
 ```
 
 Or use VS Code's built-in Run and Debug features.
