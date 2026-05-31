@@ -577,18 +577,6 @@ func (h *Handler) adjustProgramItemTime(c *gin.Context) {
 			return
 		}
 
-		sessionSnap, snapErr := h.manager.GetSnapshot(item.SessionID)
-		if snapErr != nil {
-			h.writeDomainErr(c, snapErr)
-			return
-		}
-		if sessionSnap.Status != session.StatusEnded {
-			if _, adjustSessionErr := h.manager.AdjustTime(item.SessionID, body.DeltaSeconds); adjustSessionErr != nil {
-				h.writeDomainErr(c, adjustSessionErr)
-				return
-			}
-		}
-
 		env, runtimeErr := h.buildRuntimeEnvelope(item.SessionID)
 		if runtimeErr != nil {
 			h.writeProgramItemErr(c, runtimeErr)
@@ -827,13 +815,6 @@ func (h *Handler) adjustTime(c *gin.Context) {
 	var eventType string
 	var envelope runtimeEnvelope
 	h.withSessionRuntimeLock(id, func() {
-		adjustedEvent, err := h.manager.AdjustTime(id, body.DeltaSeconds)
-		if err != nil {
-			h.writeDomainErr(c, err)
-			return
-		}
-		eventType = adjustedEvent.Type
-
 		if h.programItemManager != nil {
 			current, _, currentErr := h.programItemManager.CurrentAndNextSnapshots(id, time.Now().UTC())
 			if currentErr != nil {
@@ -845,8 +826,26 @@ func (h *Handler) adjustTime(c *gin.Context) {
 					h.writeProgramItemErr(c, adjustErr)
 					return
 				}
+
+				env, runtimeErr := h.buildRuntimeEnvelope(id)
+				if runtimeErr != nil {
+					h.writeProgramItemErr(c, runtimeErr)
+					return
+				}
+				env.Type = "TIME_ADJUSTED"
+				env.DeltaSeconds = body.DeltaSeconds
+				envelope = env
+				eventType = env.Type
+				return
 			}
 		}
+
+		adjustedEvent, err := h.manager.AdjustTime(id, body.DeltaSeconds)
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+		eventType = adjustedEvent.Type
 
 		env, runtimeErr := h.buildRuntimeEnvelope(id)
 		if runtimeErr != nil {
@@ -907,6 +906,10 @@ func (h *Handler) buildRuntimeEnvelope(sessionID string) (runtimeEnvelope, error
 	current, next, err := h.programItemManager.CurrentAndNextSnapshots(sessionID, time.Now().UTC())
 	if err != nil {
 		return runtimeEnvelope{}, err
+	}
+
+	if current != nil && (current.Status == programitem.StatusInProgress || current.Status == programitem.StatusPaused) {
+		sessionSnap.RemainingSeconds = current.RemainingSeconds
 	}
 
 	return runtimeEnvelope{

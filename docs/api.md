@@ -513,10 +513,18 @@ Transition session from PAUSED → LIVE. Resumes countdown from where it was pau
 
 ```json
 {
-  "id": "sess_abc123",
-  "status": "LIVE",
-  "remainingSeconds": 300,
-  "updatedAt": "2025-12-15T10:33:00Z"
+  "type": "SESSION_RESUMED",
+  "session": {
+    "id": "sess_abc123",
+    "status": "LIVE",
+    "remainingSeconds": 300
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "status": "in_progress",
+    "remainingSeconds": 300
+  },
+  "nextProgramItem": null
 }
 ```
 
@@ -530,7 +538,12 @@ X-Control-Token: <token>
 Content-Type: application/json
 ```
 
-Add or subtract seconds from remaining time. Useful for extending or shortening sessions.
+Add or subtract seconds from runtime. Useful for extending or shortening live delivery.
+
+Runtime behavior:
+
+- If an active ProgramItem runtime exists (`in_progress` or `paused`), delta is applied to that ProgramItem.
+- If no active ProgramItem runtime exists, delta is applied to Session compatibility fields.
 
 **Request Body:**
 
@@ -552,10 +565,19 @@ Use negative values to reduce time:
 
 ```json
 {
-  "id": "sess_abc123",
-  "status": "LIVE",
-  "remainingSeconds": 360,
-  "updatedAt": "2025-12-15T10:34:00Z"
+  "type": "TIME_ADJUSTED",
+  "session": {
+    "id": "sess_abc123",
+    "status": "LIVE",
+    "remainingSeconds": 360
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "status": "in_progress",
+    "remainingSeconds": 360
+  },
+  "nextProgramItem": null,
+  "deltaSeconds": 60
 }
 ```
 
@@ -574,10 +596,14 @@ Transition session to ENDED. No further state changes allowed.
 
 ```json
 {
-  "id": "sess_abc123",
-  "status": "ENDED",
-  "remainingSeconds": 0,
-  "updatedAt": "2025-12-15T10:35:00Z"
+  "type": "SESSION_ENDED",
+  "session": {
+    "id": "sess_abc123",
+    "status": "ENDED",
+    "remainingSeconds": 0
+  },
+  "programItem": null,
+  "nextProgramItem": null
 }
 ```
 
@@ -602,12 +628,12 @@ Establishes a persistent WebSocket connection for receiving real-time session up
 
 ### Session Snapshot (on connect)
 
-When the client connects, the server immediately sends the current session state:
+When the client connects, the server immediately sends the unified runtime envelope:
 
 ```json
 {
   "type": "SESSION_SNAPSHOT",
-  "data": {
+  "session": {
     "id": "sess_abc123",
     "title": "Engineering Talks Q&A",
     "speakerName": "Alice Johnson",
@@ -615,37 +641,47 @@ When the client connects, the server immediately sends the current session state
     "status": "LIVE",
     "remainingSeconds": 420,
     "createdAt": "2025-12-15T10:30:00Z"
-  }
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "status": "in_progress",
+    "remainingSeconds": 420
+  },
+  "nextProgramItem": null
 }
 ```
 
 ### Session Update (on state change)
 
-When the host changes session state (start, pause, resume, end, adjust), all connected WebSocket clients receive an update:
+When runtime state changes (session or program item actions), connected clients receive an updated runtime envelope.
 
 ```json
 {
-  "type": "SESSION_UPDATE",
-  "data": {
+  "type": "SESSION_PAUSED",
+  "session": {
     "id": "sess_abc123",
     "status": "PAUSED",
-    "remainingSeconds": 300,
-    "updatedAt": "2025-12-15T10:32:00Z"
-  }
+    "remainingSeconds": 300
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "status": "paused",
+    "remainingSeconds": 300
+  },
+  "nextProgramItem": null
 }
 ```
 
 ### ProgramItem Update (on timeline change)
 
-When ProgramItems are created, updated, canceled, or reordered, all connected clients receive one of:
+When ProgramItems are created, updated, canceled, or reordered, connected clients may receive event messages such as:
 
 - `PROGRAM_ITEM_CREATED`
 - `PROGRAM_ITEM_UPDATED`
 - `PROGRAM_ITEM_CANCELED`
 - `PROGRAM_ITEMS_REORDERED`
 
-User viewers should treat these as refresh triggers for
-`GET /api/v1/sessions/:id/current-program-item` to stay aligned with server-side item selection.
+For runtime timer and now/next state, user viewers should rely on unified runtime envelope updates.
 
 ---
 

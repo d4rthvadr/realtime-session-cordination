@@ -12,21 +12,15 @@ This removes countdown drift between session controls and agenda controls.
 
 Detailed countdown math by ProgramItem status is documented in docs/programitem-time-calculation.md.
 
-## Session Entity Cleanup Plan
+## Session Entity Cleanup Status
 
-Session cleanup follow-up phase will be after frontend rollout stabilizes on the unified runtime envelope.
+Session cleanup follow-up has been applied for runtime mutation paths.
 
-Reasoning:
+Current state:
 
-- Session countdown fields are still useful for compatibility during transition.
-- Removing or repurposing them immediately increases frontend migration risk.
-- Once admin and user clients are fully switched, session timer fields can be reduced to container metadata only.
-
-Risk Mitigation:
-
-1. Mark session countdown fields as transitional in API docs.
-2. Remove session countdown mutation coupling that duplicates active ProgramItem runtime state.
-3. Keep only compatibility mirrors where needed for external consumers.
+- Session countdown fields remain transitional compatibility mirrors.
+- Adjust-time mutation coupling no longer writes to both Session and active ProgramItem.
+- Session adjust-time now prioritizes active ProgramItem runtime when present, with Session-only fallback when no active runtime item exists.
 
 ## System Overview
 
