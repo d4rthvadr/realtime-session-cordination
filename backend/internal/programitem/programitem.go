@@ -97,6 +97,7 @@ type Snapshot struct {
 	Metadata                   map[string]any `json:"metadata,omitempty"`
 	CreatedAt                  time.Time      `json:"createdAt"`
 	UpdatedAt                  time.Time      `json:"updatedAt"`
+	RemainingSeconds           int            `json:"remainingSeconds"`
 }
 
 type CreateInput struct {
@@ -261,7 +262,7 @@ func (m *Manager) CurrentAndNextSnapshots(sessionID string, at time.Time) (*Snap
 
 	var current *ProgramItem
 	for _, item := range sorted {
-		if item.Status == StatusInProgress {
+		if item.Status == StatusInProgress || item.Status == StatusPaused {
 			current = item
 			break
 		}
@@ -433,12 +434,51 @@ func (m *Manager) Start(id string) (Snapshot, error) {
 	return buildSnapshot(item), nil
 }
 
+func (m *Manager) Pause(id string) (Snapshot, error) {
+	now := time.Now().UTC()
+	item, err := m.store.TransitionToPaused(id, now)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	return buildSnapshot(item), nil
+}
+
+func (m *Manager) Resume(id string) (Snapshot, error) {
+	now := time.Now().UTC()
+	item, err := m.store.TransitionToResumed(id, now)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	return buildSnapshot(item), nil
+}
+
+func (m *Manager) AdjustTime(id string, deltaSeconds int) (Snapshot, error) {
+	now := time.Now().UTC()
+	item, err := m.store.AdjustRuntime(id, deltaSeconds, now)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	return buildSnapshot(item), nil
+}
+
 func (m *Manager) End(id string) (Snapshot, error) {
 	now := time.Now().UTC()
+	current, err := m.store.Get(id)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if current.Status != StatusInProgress && current.Status != StatusPaused {
+		return Snapshot{}, ErrInvalidStatusTransition
+	}
+	remaining := computeRemainingSeconds(current, now)
 	item, err := m.store.TransitionToEnded(id, now)
 	if err != nil {
 		return Snapshot{}, err
 	}
+	item.EndedRemainingSeconds = &remaining
 
 	return buildSnapshot(item), nil
 }
@@ -469,6 +509,7 @@ func (m *Manager) Reorder(sessionID string, items []ReorderItem) ([]Snapshot, er
 }
 
 func buildSnapshot(item *ProgramItem) Snapshot {
+	now := time.Now().UTC()
 	return Snapshot{
 		ID:                         item.ID,
 		SessionID:                  item.SessionID,
@@ -493,6 +534,39 @@ func buildSnapshot(item *ProgramItem) Snapshot {
 		Metadata:                   cloneMetadata(item.Metadata),
 		CreatedAt:                  item.CreatedAt,
 		UpdatedAt:                  item.UpdatedAt,
+		RemainingSeconds:           computeRemainingSeconds(item, now),
+	}
+}
+
+func computeRemainingSeconds(item *ProgramItem, at time.Time) int {
+	base := item.RuntimeDurationSeconds + item.AdjustmentSeconds
+
+	switch item.Status {
+	case StatusScheduled:
+		return base
+	case StatusInProgress:
+		if item.ActualStart == nil {
+			return base
+		}
+		elapsed := int(at.Sub(*item.ActualStart).Seconds()) - item.TotalPausedDurationSeconds
+		return base - elapsed
+	case StatusPaused:
+		if item.ActualStart == nil || item.PausedAt == nil {
+			return base
+		}
+		elapsed := int(item.PausedAt.Sub(*item.ActualStart).Seconds()) - item.TotalPausedDurationSeconds
+		return base - elapsed
+	case StatusEnded:
+		if item.EndedRemainingSeconds != nil {
+			return *item.EndedRemainingSeconds
+		}
+		if item.ActualEnd == nil || item.ActualStart == nil {
+			return base
+		}
+		elapsed := int(item.ActualEnd.Sub(*item.ActualStart).Seconds()) - item.TotalPausedDurationSeconds
+		return base - elapsed
+	default:
+		return base
 	}
 }
 

@@ -9,6 +9,9 @@ type Store interface {
 	ListBySession(sessionID string) ([]*ProgramItem, error)
 	Update(item *ProgramItem) error
 	TransitionToInProgress(id string, at time.Time) (*ProgramItem, error)
+	TransitionToPaused(id string, at time.Time) (*ProgramItem, error)
+	TransitionToResumed(id string, at time.Time) (*ProgramItem, error)
+	AdjustRuntime(id string, deltaSeconds int, at time.Time) (*ProgramItem, error)
 	TransitionToEnded(id string, at time.Time) (*ProgramItem, error)
 	Reorder(sessionID string, positions map[string]int) error
 	HasOverlap(sessionID string, start, end time.Time, excludeID string) (bool, error)

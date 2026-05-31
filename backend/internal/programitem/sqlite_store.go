@@ -402,10 +402,10 @@ func (s *SqliteStore) TransitionToInProgress(id string, at time.Time) (*ProgramI
 			SELECT 1
 			FROM program_items
 			WHERE session_id = ?
-			  AND status = ?
+			  AND (status = ? OR status = ?)
 			  AND id != ?
 		)
-	`, current.SessionID, StatusInProgress, current.ID).Scan(&hasInProgress)
+	`, current.SessionID, StatusInProgress, StatusPaused, current.ID).Scan(&hasInProgress)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check in-progress item: %w", err)
 	}
@@ -417,7 +417,8 @@ func (s *SqliteStore) TransitionToInProgress(id string, at time.Time) (*ProgramI
 	result, err := tx.Exec(`
 		UPDATE program_items
 		SET status = ?, actual_start = ?, paused_at = NULL, actual_end = NULL,
-		    ended_remaining_seconds = NULL, updated_at = ?
+		    ended_remaining_seconds = NULL, total_paused_duration_seconds = 0,
+		    pause_count = 0, ended_reason = NULL, updated_at = ?
 		WHERE id = ? AND status = ?
 	`, StatusInProgress, now, now, id, StatusScheduled)
 	if err != nil {
@@ -443,13 +444,13 @@ func (s *SqliteStore) TransitionToInProgress(id string, at time.Time) (*ProgramI
 	return updated, nil
 }
 
-func (s *SqliteStore) TransitionToEnded(id string, at time.Time) (*ProgramItem, error) {
+func (s *SqliteStore) TransitionToPaused(id string, at time.Time) (*ProgramItem, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, fmt.Errorf("failed to begin transition transaction: %w", err)
+		return nil, fmt.Errorf("failed to begin pause transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -464,9 +465,173 @@ func (s *SqliteStore) TransitionToEnded(id string, at time.Time) (*ProgramItem, 
 	now := at.UTC().Format(time.RFC3339)
 	result, err := tx.Exec(`
 		UPDATE program_items
-		SET status = ?, actual_end = ?, paused_at = NULL, updated_at = ?
+		SET status = ?, paused_at = ?, updated_at = ?
 		WHERE id = ? AND status = ?
-	`, StatusEnded, now, now, id, StatusInProgress)
+	`, StatusPaused, now, now, id, StatusInProgress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to transition program item to paused: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if affected == 0 {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	updated, err := txGetProgramItem(tx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit pause transaction: %w", err)
+	}
+
+	return updated, nil
+}
+
+func (s *SqliteStore) TransitionToResumed(id string, at time.Time) (*ProgramItem, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin resume transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := txGetProgramItem(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.Status != StatusPaused || current.PausedAt == nil {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	pausedFor := int(at.UTC().Sub(*current.PausedAt).Seconds())
+	if pausedFor < 0 {
+		pausedFor = 0
+	}
+
+	now := at.UTC().Format(time.RFC3339)
+	result, err := tx.Exec(`
+		UPDATE program_items
+		SET status = ?,
+		    total_paused_duration_seconds = total_paused_duration_seconds + ?,
+		    pause_count = pause_count + 1,
+		    paused_at = NULL,
+		    updated_at = ?
+		WHERE id = ? AND status = ?
+	`, StatusInProgress, pausedFor, now, id, StatusPaused)
+	if err != nil {
+		return nil, fmt.Errorf("failed to transition program item to in_progress: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if affected == 0 {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	updated, err := txGetProgramItem(tx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit resume transaction: %w", err)
+	}
+
+	return updated, nil
+}
+
+func (s *SqliteStore) AdjustRuntime(id string, deltaSeconds int, at time.Time) (*ProgramItem, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin adjust transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := txGetProgramItem(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.Status == StatusEnded || current.Status == StatusCanceled {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	now := at.UTC().Format(time.RFC3339)
+	result, err := tx.Exec(`
+		UPDATE program_items
+		SET adjustment_seconds = adjustment_seconds + ?,
+		    updated_at = ?
+		WHERE id = ?
+		  AND status IN (?, ?, ?)
+	`, deltaSeconds, now, id, StatusScheduled, StatusInProgress, StatusPaused)
+	if err != nil {
+		return nil, fmt.Errorf("failed to adjust program item runtime: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if affected == 0 {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	updated, err := txGetProgramItem(tx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit adjust transaction: %w", err)
+	}
+
+	return updated, nil
+}
+
+func (s *SqliteStore) TransitionToEnded(id string, at time.Time) (*ProgramItem, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transition transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	current, err := txGetProgramItem(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.Status != StatusInProgress && current.Status != StatusPaused {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	remaining := current.RuntimeDurationSeconds + current.AdjustmentSeconds
+	if current.ActualStart != nil {
+		var elapsed int
+		if current.Status == StatusPaused && current.PausedAt != nil {
+			elapsed = int(current.PausedAt.Sub(*current.ActualStart).Seconds()) - current.TotalPausedDurationSeconds
+		} else {
+			elapsed = int(at.UTC().Sub(*current.ActualStart).Seconds()) - current.TotalPausedDurationSeconds
+		}
+		remaining -= elapsed
+	}
+
+	now := at.UTC().Format(time.RFC3339)
+	result, err := tx.Exec(`
+		UPDATE program_items
+		SET status = ?, actual_end = ?, paused_at = NULL,
+		    ended_remaining_seconds = ?, ended_reason = ?, updated_at = ?
+		WHERE id = ? AND status IN (?, ?)
+	`, StatusEnded, now, remaining, "manual", now, id, StatusInProgress, StatusPaused)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition program item to ended: %w", err)
 	}
@@ -624,9 +789,9 @@ func (s *SqliteStore) HasInProgressItem(sessionID string, excludeID string) (boo
 			SELECT 1
 			FROM program_items
 			WHERE session_id = ?
-			  AND status = ?
+			  AND (status = ? OR status = ?)
 	`
-	args := []any{sessionID, StatusInProgress}
+	args := []any{sessionID, StatusInProgress, StatusPaused}
 	if excludeID != "" {
 		query += " AND id != ?"
 		args = append(args, excludeID)

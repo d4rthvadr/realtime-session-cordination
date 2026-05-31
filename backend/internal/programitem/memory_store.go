@@ -126,7 +126,7 @@ func (ms *MemoryStore) TransitionToInProgress(id string, at time.Time) (*Program
 		if candidate.SessionID != item.SessionID || candidate.ID == item.ID {
 			continue
 		}
-		if candidate.Status == StatusInProgress {
+		if candidate.Status == StatusInProgress || candidate.Status == StatusPaused {
 			return nil, ErrInProgressExists
 		}
 	}
@@ -135,14 +135,17 @@ func (ms *MemoryStore) TransitionToInProgress(id string, at time.Time) (*Program
 	item.Status = StatusInProgress
 	item.ActualStart = &now
 	item.PausedAt = nil
+	item.TotalPausedDurationSeconds = 0
 	item.EndedRemainingSeconds = nil
 	item.ActualEnd = nil
+	item.PauseCount = 0
+	item.EndedReason = ""
 	item.UpdatedAt = now
 
 	return cloneItem(item), nil
 }
 
-func (ms *MemoryStore) TransitionToEnded(id string, at time.Time) (*ProgramItem, error) {
+func (ms *MemoryStore) TransitionToPaused(id string, at time.Time) (*ProgramItem, error) {
 	sessionID, err := ms.sessionIDForItem(id)
 	if err != nil {
 		return nil, err
@@ -163,11 +166,100 @@ func (ms *MemoryStore) TransitionToEnded(id string, at time.Time) (*ProgramItem,
 	}
 
 	now := at.UTC()
+	item.Status = StatusPaused
+	item.PausedAt = &now
+	item.UpdatedAt = now
+
+	return cloneItem(item), nil
+}
+
+func (ms *MemoryStore) TransitionToResumed(id string, at time.Time) (*ProgramItem, error) {
+	sessionID, err := ms.sessionIDForItem(id)
+	if err != nil {
+		return nil, err
+	}
+
+	unlock := ms.lockSession(sessionID)
+	defer unlock()
+
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	item, ok := ms.items[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if item.Status != StatusPaused || item.PausedAt == nil {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	now := at.UTC()
+	pausedFor := int(now.Sub(*item.PausedAt).Seconds())
+	if pausedFor < 0 {
+		pausedFor = 0
+	}
+	item.TotalPausedDurationSeconds += pausedFor
+	item.PauseCount++
+	item.Status = StatusInProgress
+	item.PausedAt = nil
+	item.UpdatedAt = now
+
+	return cloneItem(item), nil
+}
+
+func (ms *MemoryStore) AdjustRuntime(id string, deltaSeconds int, at time.Time) (*ProgramItem, error) {
+	sessionID, err := ms.sessionIDForItem(id)
+	if err != nil {
+		return nil, err
+	}
+
+	unlock := ms.lockSession(sessionID)
+	defer unlock()
+
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	item, ok := ms.items[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if item.Status == StatusEnded || item.Status == StatusCanceled {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	item.AdjustmentSeconds += deltaSeconds
+	item.UpdatedAt = at.UTC()
+
+	return cloneItem(item), nil
+}
+
+func (ms *MemoryStore) TransitionToEnded(id string, at time.Time) (*ProgramItem, error) {
+	sessionID, err := ms.sessionIDForItem(id)
+	if err != nil {
+		return nil, err
+	}
+
+	unlock := ms.lockSession(sessionID)
+	defer unlock()
+
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	item, ok := ms.items[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if item.Status != StatusInProgress && item.Status != StatusPaused {
+		return nil, ErrInvalidStatusTransition
+	}
+
+	now := at.UTC()
 	item.Status = StatusEnded
 	if item.ActualStart == nil {
 		item.ActualStart = &now
 	}
 	item.PausedAt = nil
+	item.EndedReason = "manual"
 	item.ActualEnd = &now
 	item.UpdatedAt = now
 
@@ -246,7 +338,7 @@ func (ms *MemoryStore) HasInProgressItem(sessionID string, excludeID string) (bo
 		if item.SessionID != sessionID || item.ID == excludeID {
 			continue
 		}
-		if item.Status == StatusInProgress {
+		if item.Status == StatusInProgress || item.Status == StatusPaused {
 			return true, nil
 		}
 	}
