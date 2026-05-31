@@ -38,9 +38,6 @@ export interface SessionSnapshot {
   status: string;
   createdAt: string;
   remainingSeconds: number;
-  startedAt?: string;
-  pausedAt?: string;
-  totalPausedDurationSeconds: number;
 }
 
 export type ProgramItemStatus =

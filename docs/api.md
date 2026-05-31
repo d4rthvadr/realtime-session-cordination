@@ -97,6 +97,18 @@ Notes:
 - endedReason: End reason label, currently manual.
 - remainingSeconds: Server-computed runtime countdown.
 
+### Session Runtime Field Deprecation (Applied)
+
+Session runtime columns were removed from persistence. Session now remains lifecycle/container metadata (`id`, `title`, `speakerName`, `durationSeconds`, `status`, `createdAt`) plus `remainingSeconds` compatibility output in runtime envelopes.
+
+Removed session persistence fields:
+
+- startedAt
+- pausedAt
+- totalPausedDurationSeconds
+- adjustmentSeconds
+- endedRemainingSeconds
+
 See detailed formulas in docs/programitem-time-calculation.md.
 
 ### Runtime Endpoint Summary

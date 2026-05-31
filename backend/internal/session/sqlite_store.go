@@ -3,6 +3,7 @@ package session
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -46,11 +47,6 @@ func (s *SqliteStore) runMigrations() error {
 		speaker_name TEXT NOT NULL,
 		duration_seconds INTEGER NOT NULL,
 		status TEXT NOT NULL,
-		started_at TEXT,
-		paused_at TEXT,
-		total_paused_duration_seconds INTEGER DEFAULT 0,
-		adjustment_seconds INTEGER DEFAULT 0,
-		ended_remaining_seconds INTEGER,
 		control_token TEXT NOT NULL UNIQUE,
 		created_at TEXT NOT NULL
 	);
@@ -59,8 +55,100 @@ func (s *SqliteStore) runMigrations() error {
 	CREATE INDEX IF NOT EXISTS idx_status ON sessions(status);
 	`
 
-	_, err := s.db.Exec(query)
-	return err
+	if _, err := s.db.Exec(query); err != nil {
+		return err
+	}
+
+	return s.ensureLegacyRuntimeColumnsDropped()
+}
+
+func (s *SqliteStore) ensureLegacyRuntimeColumnsDropped() error {
+	rows, err := s.db.Query("PRAGMA table_info(sessions)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect sessions schema: %w", err)
+	}
+	defer rows.Close()
+
+	legacy := map[string]bool{
+		"started_at":                    false,
+		"paused_at":                     false,
+		"total_paused_duration_seconds": false,
+		"adjustment_seconds":            false,
+		"ended_remaining_seconds":       false,
+	}
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var ctype string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to read sessions schema row: %w", err)
+		}
+		if _, ok := legacy[name]; ok {
+			legacy[name] = true
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed while reading sessions schema: %w", err)
+	}
+
+	hasLegacy := false
+	for _, present := range legacy {
+		if present {
+			hasLegacy = true
+			break
+		}
+	}
+	if !hasLegacy {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin session schema migration: %w", err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	stmts := []string{
+		`DROP INDEX IF EXISTS idx_control_token`,
+		`DROP INDEX IF EXISTS idx_status`,
+		`CREATE TABLE sessions_new (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			speaker_name TEXT NOT NULL,
+			duration_seconds INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			control_token TEXT NOT NULL UNIQUE,
+			created_at TEXT NOT NULL
+		)`,
+		`INSERT INTO sessions_new (id, title, speaker_name, duration_seconds, status, control_token, created_at)
+		 SELECT id, title, speaker_name, duration_seconds, status, control_token, created_at FROM sessions`,
+		`DROP TABLE sessions`,
+		`ALTER TABLE sessions_new RENAME TO sessions`,
+		`CREATE INDEX IF NOT EXISTS idx_control_token ON sessions(control_token)`,
+		`CREATE INDEX IF NOT EXISTS idx_status ON sessions(status)`,
+	}
+
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("failed during session schema migration (%s): %w", strings.Split(stmt, "\n")[0], err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit session schema migration: %w", err)
+	}
+	tx = nil
+
+	return nil
 }
 
 // Create persists a new session to the database
@@ -68,21 +156,14 @@ func (s *SqliteStore) Create(session *Session) (*Session, error) {
 	_, err := s.db.Exec(`
 		INSERT INTO sessions (
 			id, title, speaker_name, duration_seconds, status,
-			started_at, paused_at, total_paused_duration_seconds,
-			adjustment_seconds, ended_remaining_seconds,
 			control_token, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
 	`,
 		session.ID,
 		session.Title,
 		session.SpeakerName,
 		session.DurationSeconds,
 		session.Status,
-		timeToString(session.StartedAt),
-		timeToString(session.PausedAt),
-		session.TotalPausedDurationSeconds,
-		session.AdjustmentSeconds,
-		session.EndedRemainingSeconds,
 		session.ControlToken,
 		session.CreatedAt.Format(time.RFC3339),
 	)
@@ -98,16 +179,11 @@ func (s *SqliteStore) Create(session *Session) (*Session, error) {
 func (s *SqliteStore) Get(id string) (*Session, error) {
 	row := s.db.QueryRow(`
 		SELECT id, title, speaker_name, duration_seconds, status,
-		       started_at, paused_at, total_paused_duration_seconds,
-		       adjustment_seconds, ended_remaining_seconds,
 		       control_token, created_at
 		FROM sessions WHERE id = ?
 	`, id)
 
 	var session Session
-	var startedAt sql.NullString
-	var pausedAt sql.NullString
-	var endedRemaining sql.NullInt64
 	var createdAtStr string
 
 	err := row.Scan(
@@ -116,11 +192,6 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 		&session.SpeakerName,
 		&session.DurationSeconds,
 		&session.Status,
-		&startedAt,
-		&pausedAt,
-		&session.TotalPausedDurationSeconds,
-		&session.AdjustmentSeconds,
-		&endedRemaining,
 		&session.ControlToken,
 		&createdAtStr,
 	)
@@ -130,14 +201,6 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
-	}
-
-	// Parse nullable timestamps and integers
-	session.StartedAt = nullStringToTime(startedAt)
-	session.PausedAt = nullStringToTime(pausedAt)
-	if endedRemaining.Valid {
-		v := int(endedRemaining.Int64)
-		session.EndedRemainingSeconds = &v
 	}
 
 	createdAt, err := time.Parse(time.RFC3339, createdAtStr)
@@ -153,8 +216,6 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 func (s *SqliteStore) List() ([]*Session, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, speaker_name, duration_seconds, status,
-		       started_at, paused_at, total_paused_duration_seconds,
-		       adjustment_seconds, ended_remaining_seconds,
 		       control_token, created_at
 		FROM sessions
 		ORDER BY created_at DESC
@@ -167,9 +228,6 @@ func (s *SqliteStore) List() ([]*Session, error) {
 	sessions := make([]*Session, 0)
 	for rows.Next() {
 		var session Session
-		var startedAt sql.NullString
-		var pausedAt sql.NullString
-		var endedRemaining sql.NullInt64
 		var createdAtStr string
 
 		err = rows.Scan(
@@ -178,23 +236,11 @@ func (s *SqliteStore) List() ([]*Session, error) {
 			&session.SpeakerName,
 			&session.DurationSeconds,
 			&session.Status,
-			&startedAt,
-			&pausedAt,
-			&session.TotalPausedDurationSeconds,
-			&session.AdjustmentSeconds,
-			&endedRemaining,
 			&session.ControlToken,
 			&createdAtStr,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan session row: %w", err)
-		}
-
-		session.StartedAt = nullStringToTime(startedAt)
-		session.PausedAt = nullStringToTime(pausedAt)
-		if endedRemaining.Valid {
-			v := int(endedRemaining.Int64)
-			session.EndedRemainingSeconds = &v
 		}
 
 		createdAt, parseErr := time.Parse(time.RFC3339, createdAtStr)
@@ -220,23 +266,13 @@ func (s *SqliteStore) Update(session *Session) error {
 			title = ?,
 			speaker_name = ?,
 			duration_seconds = ?,
-			status = ?,
-			started_at = ?,
-			paused_at = ?,
-			total_paused_duration_seconds = ?,
-			adjustment_seconds = ?,
-			ended_remaining_seconds = ?
+			status = ?
 		WHERE id = ?
 	`,
 		session.Title,
 		session.SpeakerName,
 		session.DurationSeconds,
 		session.Status,
-		timeToString(session.StartedAt),
-		timeToString(session.PausedAt),
-		session.TotalPausedDurationSeconds,
-		session.AdjustmentSeconds,
-		session.EndedRemainingSeconds,
 		session.ID,
 	)
 
@@ -285,38 +321,4 @@ func (s *SqliteStore) ValidateControlToken(id, token string) error {
 // Close closes the database connection
 func (s *SqliteStore) Close() error {
 	return s.db.Close()
-}
-
-// Helper functions for timestamp conversion
-
-// timeToString converts a time.Time to RFC3339 string, or empty string if zero
-func timeToString(t *time.Time) *string {
-	if t == nil || t.IsZero() {
-		return nil
-	}
-	str := t.Format(time.RFC3339)
-	return &str
-}
-
-// stringToTime converts a string back to time.Time pointer, handling nil/empty strings
-func stringToTime(s *string) *time.Time {
-	if s == nil || *s == "" {
-		return nil
-	}
-	t, err := time.Parse(time.RFC3339, *s)
-	if err != nil {
-		return nil
-	}
-	return &t
-}
-
-func nullStringToTime(ns sql.NullString) *time.Time {
-	if !ns.Valid || ns.String == "" {
-		return nil
-	}
-	t, err := time.Parse(time.RFC3339, ns.String)
-	if err != nil {
-		return nil
-	}
-	return &t
 }

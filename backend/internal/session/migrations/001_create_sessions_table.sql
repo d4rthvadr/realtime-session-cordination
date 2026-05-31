@@ -5,11 +5,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     speaker_name TEXT NOT NULL,
     duration_seconds INTEGER NOT NULL,
     status TEXT NOT NULL,
-    started_at TEXT,
-    paused_at TEXT,
-    total_paused_duration_seconds INTEGER DEFAULT 0,
-    adjustment_seconds INTEGER DEFAULT 0,
-    ended_remaining_seconds INTEGER,
     control_token TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL
 );

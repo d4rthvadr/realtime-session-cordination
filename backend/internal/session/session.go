@@ -22,37 +22,28 @@ var (
 )
 
 type Session struct {
-	ID                         string
-	Title                      string
-	SpeakerName                string
-	DurationSeconds            int
-	Status                     string
-	StartedAt                  *time.Time
-	PausedAt                   *time.Time
-	TotalPausedDurationSeconds int
-	AdjustmentSeconds          int
-	EndedRemainingSeconds      *int
-	ControlToken               string
-	CreatedAt                  time.Time
+	ID              string
+	Title           string
+	SpeakerName     string
+	DurationSeconds int
+	Status          string
+	ControlToken    string
+	CreatedAt       time.Time
 }
 
 type Snapshot struct {
-	ID                         string     `json:"id"`
-	Title                      string     `json:"title"`
-	SpeakerName                string     `json:"speakerName"`
-	DurationSeconds            int        `json:"durationSeconds"`
-	Status                     string     `json:"status"`
-	StartedAt                  *time.Time `json:"startedAt,omitempty"`
-	PausedAt                   *time.Time `json:"pausedAt,omitempty"`
-	TotalPausedDurationSeconds int        `json:"totalPausedDurationSeconds"`
-	CreatedAt                  time.Time  `json:"createdAt"`
-	RemainingSeconds           int        `json:"remainingSeconds"`
+	ID               string    `json:"id"`
+	Title            string    `json:"title"`
+	SpeakerName      string    `json:"speakerName"`
+	DurationSeconds  int       `json:"durationSeconds"`
+	Status           string    `json:"status"`
+	CreatedAt        time.Time `json:"createdAt"`
+	RemainingSeconds int       `json:"remainingSeconds"`
 }
 
 type Event struct {
 	Type         string   `json:"type"`
 	Session      Snapshot `json:"session"`
-	StartedAt    int64    `json:"startedAt,omitempty"`
 	DeltaSeconds int      `json:"deltaSeconds,omitempty"`
 }
 
@@ -145,15 +136,13 @@ func (m *Manager) Start(id string) (Event, error) {
 	}
 
 	s.Status = StatusLive
-	s.StartedAt = &now
-	s.PausedAt = nil
 
 	if err = m.store.Update(s); err != nil {
 		return Event{}, err
 	}
 
 	snapshot := buildSnapshot(s, now)
-	return Event{Type: "SESSION_STARTED", Session: snapshot, StartedAt: now.Unix()}, nil
+	return Event{Type: "SESSION_STARTED", Session: snapshot}, nil
 }
 
 func (m *Manager) Pause(id string) (Event, error) {
@@ -168,7 +157,6 @@ func (m *Manager) Pause(id string) (Event, error) {
 	}
 
 	s.Status = StatusPaused
-	s.PausedAt = &now
 
 	if err = m.store.Update(s); err != nil {
 		return Event{}, err
@@ -185,13 +173,10 @@ func (m *Manager) Resume(id string) (Event, error) {
 	if err != nil {
 		return Event{}, err
 	}
-	if s.Status != StatusPaused || s.PausedAt == nil {
+	if s.Status != StatusPaused {
 		return Event{}, ErrInvalidTransition
 	}
 
-	pausedFor := now.Sub(*s.PausedAt)
-	s.TotalPausedDurationSeconds += int(pausedFor.Seconds())
-	s.PausedAt = nil
 	s.Status = StatusLive
 
 	if err = m.store.Update(s); err != nil {
@@ -212,11 +197,7 @@ func (m *Manager) End(id string) (Event, error) {
 	if s.Status != StatusLive && s.Status != StatusPaused {
 		return Event{}, ErrInvalidTransition
 	}
-
-	remaining := computeRemainingSeconds(s, now)
-	s.EndedRemainingSeconds = &remaining
 	s.Status = StatusEnded
-	s.PausedAt = nil
 
 	if err = m.store.Update(s); err != nil {
 		return Event{}, err
@@ -237,7 +218,7 @@ func (m *Manager) AdjustTime(id string, deltaSeconds int) (Event, error) {
 		return Event{}, ErrInvalidTransition
 	}
 
-	s.AdjustmentSeconds += deltaSeconds
+	s.DurationSeconds += deltaSeconds
 
 	if err = m.store.Update(s); err != nil {
 		return Event{}, err
@@ -253,44 +234,22 @@ func (m *Manager) SessionExists(id string) bool {
 
 func buildSnapshot(s *Session, now time.Time) Snapshot {
 	return Snapshot{
-		ID:                         s.ID,
-		Title:                      s.Title,
-		SpeakerName:                s.SpeakerName,
-		DurationSeconds:            s.DurationSeconds,
-		Status:                     s.Status,
-		StartedAt:                  s.StartedAt,
-		PausedAt:                   s.PausedAt,
-		TotalPausedDurationSeconds: s.TotalPausedDurationSeconds,
-		CreatedAt:                  s.CreatedAt,
-		RemainingSeconds:           computeRemainingSeconds(s, now),
+		ID:               s.ID,
+		Title:            s.Title,
+		SpeakerName:      s.SpeakerName,
+		DurationSeconds:  s.DurationSeconds,
+		Status:           s.Status,
+		CreatedAt:        s.CreatedAt,
+		RemainingSeconds: computeRemainingSeconds(s, now),
 	}
 }
 
-func computeRemainingSeconds(s *Session, now time.Time) int {
-	base := s.DurationSeconds + s.AdjustmentSeconds
-
+func computeRemainingSeconds(s *Session, _ time.Time) int {
 	switch s.Status {
-	case StatusCreated:
-		return base
-	case StatusLive:
-		if s.StartedAt == nil {
-			return base
-		}
-		elapsed := int(now.Sub(*s.StartedAt).Seconds()) - s.TotalPausedDurationSeconds
-		return base - elapsed
-	case StatusPaused:
-		if s.StartedAt == nil || s.PausedAt == nil {
-			return base
-		}
-		elapsed := int(s.PausedAt.Sub(*s.StartedAt).Seconds()) - s.TotalPausedDurationSeconds
-		return base - elapsed
 	case StatusEnded:
-		if s.EndedRemainingSeconds != nil {
-			return *s.EndedRemainingSeconds
-		}
-		return base
+		return 0
 	default:
-		return base
+		return s.DurationSeconds
 	}
 }
 

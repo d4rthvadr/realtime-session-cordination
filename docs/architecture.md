@@ -18,7 +18,8 @@ Session cleanup follow-up has been applied for runtime mutation paths.
 
 Current state:
 
-- Session countdown fields remain transitional compatibility mirrors.
+- Session runtime persistence fields were removed from the Session entity.
+- `session.remainingSeconds` remains a compatibility mirror in runtime envelopes.
 - Adjust-time mutation coupling no longer writes to both Session and active ProgramItem.
 - Session adjust-time now prioritizes active ProgramItem runtime when present, with Session-only fallback when no active runtime item exists.
 
