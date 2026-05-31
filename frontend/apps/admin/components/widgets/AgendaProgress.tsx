@@ -15,7 +15,15 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ClipboardList, ArrowUp, ArrowDown, XCircle, Plus } from "lucide-react";
+import {
+  ClipboardList,
+  ArrowUp,
+  ArrowDown,
+  XCircle,
+  Plus,
+  Play,
+  Square,
+} from "lucide-react";
 import type {
   ProgramItemCreateInput,
   ProgramItemSnapshot,
@@ -36,7 +44,10 @@ interface AgendaProgressProps {
   error: string | null;
   onCreateAction: (input: ProgramItemCreateInput) => void;
   onCancelAction: (itemId: string) => void;
+  onStartAction: (itemId: string) => void;
+  onEndAction: (itemId: string) => void;
   onReorderAction: (items: Array<{ id: string; position: number }>) => void;
+  runtimeEnabled: boolean;
 }
 
 export default function AgendaProgress({
@@ -45,7 +56,10 @@ export default function AgendaProgress({
   error,
   onCreateAction,
   onCancelAction,
+  onStartAction,
+  onEndAction,
   onReorderAction,
+  runtimeEnabled,
 }: AgendaProgressProps) {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [title, setTitle] = useState("");
@@ -293,7 +307,11 @@ export default function AgendaProgress({
                     className={
                       item.status === "canceled"
                         ? "border-amber-300 text-amber-700"
-                        : "border-emerald-300 text-emerald-700"
+                        : item.status === "in_progress"
+                          ? "border-sky-300 text-sky-700"
+                          : item.status === "ended"
+                            ? "border-slate-300 text-slate-700"
+                            : "border-emerald-300 text-emerald-700"
                     }
                   >
                     {item.status.toUpperCase()}
@@ -332,6 +350,32 @@ export default function AgendaProgress({
                   >
                     <ArrowDown className="h-3 w-3" />
                   </Button>
+                  {item.status === "scheduled" ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 rounded-full text-emerald-700 border-emerald-300"
+                      disabled={isPending || !runtimeEnabled}
+                      onClick={() => onStartAction(item.id)}
+                    >
+                      <Play className="mr-1 h-3 w-3" />
+                      Start
+                    </Button>
+                  ) : null}
+                  {item.status === "in_progress" ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 rounded-full text-sky-700 border-sky-300"
+                      disabled={isPending || !runtimeEnabled}
+                      onClick={() => onEndAction(item.id)}
+                    >
+                      <Square className="mr-1 h-3 w-3" />
+                      End
+                    </Button>
+                  ) : null}
                   {item.status === "scheduled" ? (
                     <Button
                       type="button"

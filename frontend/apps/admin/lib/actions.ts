@@ -57,7 +57,7 @@ export interface ProgramItemSnapshot {
   sessionId: string;
   title: string;
   type: string;
-  status: "scheduled" | "canceled";
+  status: "scheduled" | "in_progress" | "ended" | "canceled";
   hostName?: string;
   scheduledStart: string;
   scheduledEnd: string;
@@ -84,7 +84,7 @@ export interface ProgramItemCreateInput {
 export interface ProgramItemUpdateInput {
   title?: string;
   type?: string;
-  status?: "scheduled" | "canceled";
+  status?: "scheduled" | "in_progress" | "ended" | "canceled";
   hostName?: string;
   scheduledStart?: string;
   scheduledEnd?: string;
@@ -564,6 +564,92 @@ export async function cancelProgramItem(itemId: string, controlToken: string) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to cancel program item";
+    return { programItem: null as ProgramItemSnapshot | null, error: message };
+  }
+}
+
+// POST /api/v1/program-items/:itemId/start - Start program item
+export async function startProgramItem(itemId: string, controlToken: string) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        programItem: null as ProgramItemSnapshot | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/program-items/${itemId}/start`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "X-Control-Token": controlToken,
+        },
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        programItem: null as ProgramItemSnapshot | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to start program item: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return {
+      programItem: data.programItem as ProgramItemSnapshot,
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to start program item";
+    return { programItem: null as ProgramItemSnapshot | null, error: message };
+  }
+}
+
+// POST /api/v1/program-items/:itemId/end - End program item
+export async function endProgramItem(itemId: string, controlToken: string) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        programItem: null as ProgramItemSnapshot | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/program-items/${itemId}/end`,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "X-Control-Token": controlToken,
+        },
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        programItem: null as ProgramItemSnapshot | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to end program item: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return {
+      programItem: data.programItem as ProgramItemSnapshot,
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to end program item";
     return { programItem: null as ProgramItemSnapshot | null, error: message };
   }
 }

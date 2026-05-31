@@ -6,6 +6,8 @@ import {
   getProgramItems,
   createProgramItem,
   cancelProgramItem,
+  startProgramItem,
+  endProgramItem,
   reorderProgramItems,
   startSession,
   pauseSession,
@@ -157,6 +159,8 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
   const canPause = session?.status === "LIVE";
   const canResume = session?.status === "PAUSED";
   const canEnd = session?.status === "LIVE" || session?.status === "PAUSED";
+  const isProgramItemRuntimeAllowed =
+    session?.status === "LIVE" || session?.status === "PAUSED";
 
   const handleCreateProgramItem = (input: ProgramItemCreateInput) => {
     if (!controlToken) {
@@ -189,6 +193,50 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     setProgramItemError(null);
     startTransition(async () => {
       const result = await cancelProgramItem(itemId, controlToken);
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+      const programItem = result.programItem;
+      if (programItem) {
+        setProgramItems((current) =>
+          current.map((item) => (item.id === itemId ? programItem : item)),
+        );
+      }
+    });
+  };
+
+  const handleStartProgramItem = (itemId: string) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await startProgramItem(itemId, controlToken);
+      if (result.error) {
+        setProgramItemError(result.error);
+        return;
+      }
+      const programItem = result.programItem;
+      if (programItem) {
+        setProgramItems((current) =>
+          current.map((item) => (item.id === itemId ? programItem : item)),
+        );
+      }
+    });
+  };
+
+  const handleEndProgramItem = (itemId: string) => {
+    if (!controlToken) {
+      setProgramItemError("No control token available");
+      return;
+    }
+
+    setProgramItemError(null);
+    startTransition(async () => {
+      const result = await endProgramItem(itemId, controlToken);
       if (result.error) {
         setProgramItemError(result.error);
         return;
@@ -472,7 +520,10 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
             error={programItemError}
             onCreateAction={handleCreateProgramItem}
             onCancelAction={handleCancelProgramItem}
+            onStartAction={handleStartProgramItem}
+            onEndAction={handleEndProgramItem}
             onReorderAction={handleReorderProgramItems}
+            runtimeEnabled={isProgramItemRuntimeAllowed}
           />
 
           <SessionLog
