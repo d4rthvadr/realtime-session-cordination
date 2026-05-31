@@ -309,6 +309,8 @@ export default function AgendaProgress({
                         ? "border-amber-300 text-amber-700"
                         : item.status === "in_progress"
                           ? "border-sky-300 text-sky-700"
+                          : item.status === "paused"
+                            ? "border-indigo-300 text-indigo-700"
                           : item.status === "ended"
                             ? "border-slate-300 text-slate-700"
                             : "border-emerald-300 text-emerald-700"
@@ -363,7 +365,7 @@ export default function AgendaProgress({
                       Start
                     </Button>
                   ) : null}
-                  {item.status === "in_progress" ? (
+                  {item.status === "in_progress" || item.status === "paused" ? (
                     <Button
                       type="button"
                       size="sm"
