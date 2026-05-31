@@ -31,10 +31,6 @@ const TIMER_CLASS_BY_LEVEL = {
 export default function CountdownBoard({ sessionId }: CountdownBoardProps) {
   const title = useSessionStore((state) => state.title);
   const speakerName = useSessionStore((state) => state.speakerName);
-  const durationSeconds = useSessionStore((state) => state.durationSeconds);
-  const serverRemainingSeconds = useSessionStore(
-    (state) => state.serverRemainingSeconds,
-  );
   const status = useSessionStore((state) => state.status);
   const serverNowMs = useSessionStore((state) => state.serverNowMs);
   const connectionState = useSessionStore((state) => state.connectionState);

@@ -908,10 +908,6 @@ func (h *Handler) buildRuntimeEnvelope(sessionID string) (runtimeEnvelope, error
 		return runtimeEnvelope{}, err
 	}
 
-	if current != nil && (current.Status == programitem.StatusInProgress || current.Status == programitem.StatusPaused) {
-		sessionSnap.RemainingSeconds = current.RemainingSeconds
-	}
-
 	return runtimeEnvelope{
 		Session:         sessionSnap,
 		ProgramItem:     current,

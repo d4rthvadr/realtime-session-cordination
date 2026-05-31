@@ -13,7 +13,6 @@ interface BackendSessionSnapshot {
   title: string;
   speakerName: string;
   durationSeconds: number;
-  remainingSeconds: number;
   status: SessionSnapshot["status"];
   createdAt?: string;
 }
@@ -41,7 +40,6 @@ function normalizeSnapshot(snapshot: BackendSessionSnapshot): SessionSnapshot {
     title: snapshot.title,
     speakerName: snapshot.speakerName,
     durationSeconds: snapshot.durationSeconds,
-    serverRemainingSeconds: snapshot.remainingSeconds,
     status: snapshot.status,
     serverNowMs: Date.now(),
   };

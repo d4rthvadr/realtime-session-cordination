@@ -37,7 +37,6 @@ export interface SessionSnapshot {
   durationSeconds: number;
   status: string;
   createdAt: string;
-  remainingSeconds: number;
 }
 
 export type ProgramItemStatus =

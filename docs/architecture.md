@@ -19,7 +19,6 @@ Session cleanup follow-up has been applied for runtime mutation paths.
 Current state:
 
 - Session runtime persistence fields were removed from the Session entity.
-- `session.remainingSeconds` remains a compatibility mirror in runtime envelopes.
 - Adjust-time mutation coupling no longer writes to both Session and active ProgramItem.
 - Session adjust-time now prioritizes active ProgramItem runtime when present, with Session-only fallback when no active runtime item exists.
 
@@ -110,7 +109,6 @@ interface RuntimeEnvelope {
     speakerName: string;
     durationSeconds: number;
     status: "CREATED" | "LIVE" | "PAUSED" | "ENDED";
-    remainingSeconds: number; // transitional compatibility mirror
   };
   programItem: ProgramItemSnapshot | null;
   nextProgramItem: ProgramItemSnapshot | null;
@@ -165,7 +163,6 @@ interface Session {
   speakerName: string;
   durationSeconds: number;
   status: "CREATED" | "LIVE" | "PAUSED" | "ENDED";
-  remainingSeconds: number;
 }
 
 interface AdminSessionState {
@@ -234,7 +231,6 @@ interface AdminSessionState {
 The server owns runtime calculations and returns current values in each runtime envelope.
 
 - `programItem.remainingSeconds` is authoritative when an active item exists.
-- `session.remainingSeconds` is a transitional compatibility mirror.
 - Without an active ProgramItem, viewer countdown is `00:00`.
 
 Detailed formula and status-based math are documented in docs/programitem-time-calculation.md.

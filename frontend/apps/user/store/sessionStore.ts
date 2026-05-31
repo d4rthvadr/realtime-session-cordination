@@ -40,7 +40,6 @@ export interface SessionSnapshot {
   title: string;
   speakerName: string;
   durationSeconds: number;
-  serverRemainingSeconds: number;
   status: SessionStatus;
   serverNowMs?: number;
 }
@@ -68,7 +67,6 @@ const DEFAULT_SESSION_VALUES: SessionSnapshot = {
   title: "",
   speakerName: "",
   durationSeconds: 0,
-  serverRemainingSeconds: 0,
   status: "CREATED",
   serverNowMs: Date.now(),
 };

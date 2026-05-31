@@ -18,7 +18,6 @@ Runtime endpoints now return:
     "speakerName": "Alice Johnson",
     "durationSeconds": 600,
     "status": "PAUSED",
-    "remainingSeconds": 312,
     "createdAt": "2026-05-31T10:00:00Z"
   },
   "programItem": {
@@ -99,7 +98,7 @@ Notes:
 
 ### Session Runtime Field Deprecation (Applied)
 
-Session runtime columns were removed from persistence. Session now remains lifecycle/container metadata (`id`, `title`, `speakerName`, `durationSeconds`, `status`, `createdAt`) plus `remainingSeconds` compatibility output in runtime envelopes.
+Session runtime columns were removed from persistence. Session now remains lifecycle/container metadata (`id`, `title`, `speakerName`, `durationSeconds`, `status`, `createdAt`).
 
 Removed session persistence fields:
 
@@ -208,7 +207,6 @@ Create a new timed session.
     "speakerName": "Alice Johnson",
     "durationSeconds": 600,
     "status": "CREATED",
-    "remainingSeconds": 600,
     "createdAt": "2025-12-15T10:30:00Z"
   },
   "controlToken": "token_xyz789",
@@ -223,7 +221,6 @@ Create a new timed session.
 - `speakerName`: Speaker or presenter name
 - `durationSeconds`: Total session duration in seconds
 - `status`: Session state (CREATED | LIVE | PAUSED | ENDED)
-- `remainingSeconds`: Time remaining in seconds (server-authoritative)
 - `createdAt`: ISO 8601 timestamp of creation
 - `controlToken`: Secret token for host operations (store in sessionStorage)
 
@@ -248,7 +245,6 @@ Retrieve current runtime envelope. No authentication required (read-only).
     "speakerName": "Alice Johnson",
     "durationSeconds": 600,
     "status": "LIVE",
-    "remainingSeconds": 450,
     "createdAt": "2025-12-15T10:30:00Z"
   },
   "programItem": null,
@@ -470,16 +466,19 @@ POST /api/v1/sessions/:id/start
 X-Control-Token: <token>
 ```
 
-Transition session from CREATED → LIVE. Starts authoritative server timer.
+Transition session from CREATED → LIVE.
 
 **Response (200):**
 
 ```json
 {
-  "id": "sess_abc123",
-  "status": "LIVE",
-  "remainingSeconds": 600,
-  "updatedAt": "2025-12-15T10:31:00Z"
+  "type": "SESSION_STARTED",
+  "session": {
+    "id": "sess_abc123",
+    "status": "LIVE"
+  },
+  "programItem": null,
+  "nextProgramItem": null
 }
 ```
 
@@ -497,16 +496,23 @@ POST /api/v1/sessions/:id/pause
 X-Control-Token: <token>
 ```
 
-Transition session from LIVE → PAUSED. Freezes countdown.
+Transition session from LIVE → PAUSED.
 
 **Response (200):**
 
 ```json
 {
-  "id": "sess_abc123",
-  "status": "PAUSED",
-  "remainingSeconds": 300,
-  "updatedAt": "2025-12-15T10:32:00Z"
+  "type": "SESSION_PAUSED",
+  "session": {
+    "id": "sess_abc123",
+    "status": "PAUSED"
+  },
+  "programItem": {
+    "id": "pi_abc123",
+    "status": "paused",
+    "remainingSeconds": 300
+  },
+  "nextProgramItem": null
 }
 ```
 
@@ -528,8 +534,7 @@ Transition session from PAUSED → LIVE. Resumes countdown from where it was pau
   "type": "SESSION_RESUMED",
   "session": {
     "id": "sess_abc123",
-    "status": "LIVE",
-    "remainingSeconds": 300
+    "status": "LIVE"
   },
   "programItem": {
     "id": "pi_abc123",
@@ -555,7 +560,7 @@ Add or subtract seconds from runtime. Useful for extending or shortening live de
 Runtime behavior:
 
 - If an active ProgramItem runtime exists (`in_progress` or `paused`), delta is applied to that ProgramItem.
-- If no active ProgramItem runtime exists, delta is applied to Session compatibility fields.
+- If no active ProgramItem runtime exists, delta updates session `durationSeconds` lifecycle metadata.
 
 **Request Body:**
 
@@ -580,8 +585,7 @@ Use negative values to reduce time:
   "type": "TIME_ADJUSTED",
   "session": {
     "id": "sess_abc123",
-    "status": "LIVE",
-    "remainingSeconds": 360
+    "status": "LIVE"
   },
   "programItem": {
     "id": "pi_abc123",
@@ -611,8 +615,7 @@ Transition session to ENDED. No further state changes allowed.
   "type": "SESSION_ENDED",
   "session": {
     "id": "sess_abc123",
-    "status": "ENDED",
-    "remainingSeconds": 0
+    "status": "ENDED"
   },
   "programItem": null,
   "nextProgramItem": null
@@ -651,7 +654,6 @@ When the client connects, the server immediately sends the unified runtime envel
     "speakerName": "Alice Johnson",
     "durationSeconds": 600,
     "status": "LIVE",
-    "remainingSeconds": 420,
     "createdAt": "2025-12-15T10:30:00Z"
   },
   "programItem": {
