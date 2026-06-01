@@ -129,6 +129,56 @@ See detailed formulas in docs/programitem-time-calculation.md.
 
 The websocket connect snapshot and runtime updates now use the same unified runtime envelope shape.
 
+### Session Log Taxonomy (Phase 1A)
+
+Session logs are append-only timeline records generated from host mutations and server-driven cascades.
+
+Canonical event types:
+
+- SESSION_CREATED
+- SESSION_STARTED
+- SESSION_PAUSED
+- SESSION_RESUMED
+- SESSION_ENDED
+- SESSION_TIME_ADJUSTED
+- PROGRAM_ITEM_CREATED
+- PROGRAM_ITEM_UPDATED
+- PROGRAM_ITEMS_REORDERED
+- PROGRAM_ITEM_CANCELED
+- PROGRAM_ITEM_STARTED
+- PROGRAM_ITEM_PAUSED
+- PROGRAM_ITEM_RESUMED
+- PROGRAM_ITEM_ENDED
+- PROGRAM_ITEM_TIME_ADJUSTED
+- CASCADE_PROGRAM_ITEM_PAUSED_BY_SESSION
+- CASCADE_PROGRAM_ITEM_RESUMED_BY_SESSION
+- CASCADE_PROGRAM_ITEM_ENDED_BY_SESSION
+- CASCADE_PROGRAM_ITEM_TIME_ADJUSTED_BY_SESSION
+
+Human-readable trail message templates:
+
+- SESSION_CREATED: Created session "{sessionTitle}"
+- SESSION_STARTED: Started session "{sessionTitle}"
+- SESSION_PAUSED: Paused session "{sessionTitle}"
+- SESSION_RESUMED: Resumed session "{sessionTitle}"
+- SESSION_ENDED: Ended session "{sessionTitle}"
+- SESSION_TIME_ADJUSTED: Adjusted session time by {+/-deltaSeconds}s
+- PROGRAM_ITEM_CREATED: Added program item "{programItemTitle}"
+- PROGRAM_ITEM_UPDATED: Updated program item "{programItemTitle}"
+- PROGRAM_ITEMS_REORDERED: Reordered {count} program items
+- PROGRAM_ITEM_CANCELED: Canceled program item "{programItemTitle}"
+- PROGRAM_ITEM_STARTED: Started program item "{programItemTitle}"
+- PROGRAM_ITEM_PAUSED: Paused program item "{programItemTitle}"
+- PROGRAM_ITEM_RESUMED: Resumed program item "{programItemTitle}"
+- PROGRAM_ITEM_ENDED: Ended program item "{programItemTitle}"
+- PROGRAM_ITEM_TIME_ADJUSTED: Adjusted program item "{programItemTitle}" by {+/-deltaSeconds}s
+- CASCADE_PROGRAM_ITEM_PAUSED_BY_SESSION: Auto-paused program item "{programItemTitle}" because session was paused
+- CASCADE_PROGRAM_ITEM_RESUMED_BY_SESSION: Auto-resumed program item "{programItemTitle}" because session was resumed
+- CASCADE_PROGRAM_ITEM_ENDED_BY_SESSION: Auto-ended program item "{programItemTitle}" because session was ended
+- CASCADE_PROGRAM_ITEM_TIME_ADJUSTED_BY_SESSION: Auto-adjusted program item "{programItemTitle}" by {+/-deltaSeconds}s from session adjustment
+
+This taxonomy is the canonical source for timeline semantics and should be reused by API serializers and admin UI mapping.
+
 ## Base URL
 
 **Development:** `http://localhost:8080`
