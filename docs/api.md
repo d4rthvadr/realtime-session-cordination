@@ -179,6 +179,31 @@ Human-readable trail message templates:
 
 This taxonomy is the canonical source for timeline semantics and should be reused by API serializers and admin UI mapping.
 
+### Session Log Persistence (Phase 1B)
+
+Session logs are stored as append-only rows with the following fields:
+
+- id
+- session_id
+- program_item_id (nullable)
+- event_type
+- message
+- metadata (JSON, nullable)
+- occurred_at (RFC3339 timestamp)
+- request_id (nullable)
+- created_at (RFC3339 timestamp)
+
+Ordering rule for timeline reads:
+
+- ORDER BY occurred_at DESC, created_at DESC, id DESC
+
+Pagination defaults used by the log manager:
+
+- default limit: 50
+- max limit: 200
+
+Phase 1B only adds persistence/wiring. Log emission endpoints are implemented in later phases.
+
 ## Base URL
 
 **Development:** `http://localhost:8080`

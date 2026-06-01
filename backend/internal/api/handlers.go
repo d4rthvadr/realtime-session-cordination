@@ -13,6 +13,7 @@ import (
 	"realtime-session-coordination/backend/internal/logging"
 	"realtime-session-coordination/backend/internal/programitem"
 	"realtime-session-coordination/backend/internal/session"
+	"realtime-session-coordination/backend/internal/sessionlog"
 	"realtime-session-coordination/backend/internal/user"
 	"realtime-session-coordination/backend/internal/ws"
 
@@ -23,6 +24,7 @@ import (
 type Handler struct {
 	manager            *session.Manager
 	programItemManager *programitem.Manager
+	sessionLogManager  *sessionlog.Manager
 	hub                *ws.Hub
 	authService        *auth.Service
 	logger             *slog.Logger
@@ -44,7 +46,14 @@ type runtimeEnvelope struct {
 	DeltaSeconds    int                   `json:"deltaSeconds,omitempty"`
 }
 
-func NewHandler(manager *session.Manager, programItemManager *programitem.Manager, hub *ws.Hub, authService *auth.Service, logger *slog.Logger) *Handler {
+func NewHandler(
+	manager *session.Manager,
+	programItemManager *programitem.Manager,
+	sessionLogManager *sessionlog.Manager,
+	hub *ws.Hub,
+	authService *auth.Service,
+	logger *slog.Logger,
+) *Handler {
 	if logger == nil {
 		logger = logging.Default()
 	}
@@ -53,6 +62,7 @@ func NewHandler(manager *session.Manager, programItemManager *programitem.Manage
 	return &Handler{
 		manager:            manager,
 		programItemManager: programItemManager,
+		sessionLogManager:  sessionLogManager,
 		hub:                hub,
 		authService:        authService,
 		logger:             logger,
