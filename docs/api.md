@@ -115,6 +115,8 @@ See detailed formulas in docs/programitem-time-calculation.md.
 - GET /api/v1/sessions/:id returns unified runtime envelope.
 - GET /api/v1/sessions/:id/current-program-item returns current and next ProgramItem snapshots.
 - GET /api/v1/sessions/:id/logs returns paginated session log entries (auth required).
+- GET /api/v1/sessions/:id/analytics returns per-session analytics summary (auth required).
+- GET /api/v1/analytics/overview returns cross-session analytics overview (auth required).
 - POST /api/v1/sessions/:id/start returns unified runtime envelope.
 - POST /api/v1/sessions/:id/pause returns unified runtime envelope.
 - POST /api/v1/sessions/:id/resume returns unified runtime envelope.
@@ -150,6 +152,74 @@ Session log appends are also broadcast on the same session channel as lightweigh
 ```
 
 These payloads intentionally do not include runtime `session/programItem` fields.
+
+### Analytics Summary Endpoints (Phase 2)
+
+Per-session analytics:
+
+`GET /api/v1/sessions/:id/analytics`
+
+Response shape:
+
+```json
+{
+  "analytics": {
+    "sessionId": "sess_abc123",
+    "sessionStatus": "ENDED",
+    "sessionDurationSeconds": 3600,
+    "programItemCount": 8,
+    "scheduledCount": 0,
+    "inProgressCount": 0,
+    "pausedCount": 0,
+    "endedCount": 7,
+    "canceledCount": 1,
+    "plannedSeconds": 3600,
+    "effectiveBudgetSeconds": 3720,
+    "totalAdjustmentSeconds": 120,
+    "totalPauseSeconds": 180,
+    "totalPauseCount": 3,
+    "endedOnTimeCount": 5,
+    "overrunItemCount": 2,
+    "totalOverrunSeconds": 65,
+    "totalUnderrunSeconds": 140,
+    "endedOnTimeRatio": 0.7142857143,
+    "computedAt": "2026-06-02T11:00:00Z"
+  }
+}
+```
+
+Platform overview analytics:
+
+`GET /api/v1/analytics/overview`
+
+Response shape:
+
+```json
+{
+  "overview": {
+    "totalSessions": 24,
+    "createdSessions": 3,
+    "liveSessions": 1,
+    "pausedSessions": 0,
+    "endedSessions": 20,
+    "totalProgramItems": 164,
+    "endedProgramItems": 141,
+    "onTimeEndedProgramItems": 109,
+    "overrunProgramItems": 32,
+    "totalSessionDurationSeconds": 54000,
+    "totalPlannedSeconds": 53520,
+    "effectiveBudgetSeconds": 54840,
+    "totalAdjustmentSeconds": 1320,
+    "totalPauseSeconds": 2180,
+    "totalPauseCount": 79,
+    "totalOverrunSeconds": 1820,
+    "totalUnderrunSeconds": 3015,
+    "sessionCompletionRatio": 0.8333333333,
+    "programItemOnTimeRatio": 0.7730496454,
+    "computedAt": "2026-06-02T11:00:00Z"
+  }
+}
+```
 
 ### Session Log Taxonomy (Phase 1A)
 

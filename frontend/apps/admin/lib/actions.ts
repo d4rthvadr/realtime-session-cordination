@@ -134,6 +134,52 @@ export interface SessionLogListInput {
   entityType?: "session" | "program_item" | "cascade";
 }
 
+export interface SessionAnalyticsSummary {
+  sessionId: string;
+  sessionStatus: string;
+  sessionDurationSeconds: number;
+  programItemCount: number;
+  scheduledCount: number;
+  inProgressCount: number;
+  pausedCount: number;
+  endedCount: number;
+  canceledCount: number;
+  plannedSeconds: number;
+  effectiveBudgetSeconds: number;
+  totalAdjustmentSeconds: number;
+  totalPauseSeconds: number;
+  totalPauseCount: number;
+  endedOnTimeCount: number;
+  overrunItemCount: number;
+  totalOverrunSeconds: number;
+  totalUnderrunSeconds: number;
+  endedOnTimeRatio: number;
+  computedAt: string;
+}
+
+export interface AnalyticsOverview {
+  totalSessions: number;
+  createdSessions: number;
+  liveSessions: number;
+  pausedSessions: number;
+  endedSessions: number;
+  totalProgramItems: number;
+  endedProgramItems: number;
+  onTimeEndedProgramItems: number;
+  overrunProgramItems: number;
+  totalSessionDurationSeconds: number;
+  totalPlannedSeconds: number;
+  effectiveBudgetSeconds: number;
+  totalAdjustmentSeconds: number;
+  totalPauseSeconds: number;
+  totalPauseCount: number;
+  totalOverrunSeconds: number;
+  totalUnderrunSeconds: number;
+  sessionCompletionRatio: number;
+  programItemOnTimeRatio: number;
+  computedAt: string;
+}
+
 function runtimeResult(runtime: RuntimeSnapshot | null, error: string | null) {
   return {
     runtime,
@@ -189,6 +235,99 @@ export async function getSessionsList() {
     const message =
       error instanceof Error ? error.message : "Failed to fetch sessions";
     return { sessions: [], error: message };
+  }
+}
+
+// GET /api/v1/sessions/:id/analytics - Get per-session analytics summary
+export async function getSessionAnalytics(sessionId: string) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        analytics: null as SessionAnalyticsSummary | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/sessions/${sessionId}/analytics`,
+      {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        analytics: null as SessionAnalyticsSummary | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch session analytics: ${response.statusText}`,
+      );
+    }
+
+    const data = await response.json();
+    return {
+      analytics: data.analytics as SessionAnalyticsSummary,
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch session analytics";
+    return {
+      analytics: null as SessionAnalyticsSummary | null,
+      error: message,
+    };
+  }
+}
+
+// GET /api/v1/analytics/overview - Get cross-session analytics overview
+export async function getAnalyticsOverview() {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        overview: null as AnalyticsOverview | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/analytics/overview`,
+      {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        overview: null as AnalyticsOverview | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch analytics overview: ${response.statusText}`,
+      );
+    }
+
+    const data = await response.json();
+    return {
+      overview: data.overview as AnalyticsOverview,
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch analytics overview";
+    return { overview: null as AnalyticsOverview | null, error: message };
   }
 }
 

@@ -97,6 +97,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		// Session routes
 		protected.POST("/sessions", h.createSession)
 		protected.GET("/sessions", h.listSessions)
+		protected.GET("/analytics/overview", h.getAnalyticsOverview)
 		protected.GET("/sessions/:id/program-items", h.listProgramItems)
 		protected.GET("/sessions/:id/logs", h.listSessionLogs)
 		protected.GET("/sessions/:id/analytics", h.getSessionAnalytics)
@@ -281,6 +282,37 @@ func (h *Handler) getSessionAnalytics(c *gin.Context) {
 
 	summary := h.analyticsManager.BuildSessionSummary(sessionSnap, items, time.Now().UTC())
 	c.JSON(http.StatusOK, gin.H{"analytics": summary})
+}
+
+func (h *Handler) getAnalyticsOverview(c *gin.Context) {
+	if h.analyticsManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
+		return
+	}
+
+	if h.programItemManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+		return
+	}
+
+	sessions, err := h.manager.ListSnapshots()
+	if err != nil {
+		h.writeDomainErr(c, err)
+		return
+	}
+
+	itemsBySession := make(map[string][]programitem.Snapshot, len(sessions))
+	for _, sessionSnap := range sessions {
+		items, listErr := h.programItemManager.ListSnapshots(sessionSnap.ID)
+		if listErr != nil {
+			h.writeProgramItemErr(c, listErr)
+			return
+		}
+		itemsBySession[sessionSnap.ID] = items
+	}
+
+	overview := h.analyticsManager.BuildPlatformOverview(sessions, itemsBySession, time.Now().UTC())
+	c.JSON(http.StatusOK, gin.H{"overview": overview})
 }
 
 func (h *Handler) getCurrentProgramItem(c *gin.Context) {

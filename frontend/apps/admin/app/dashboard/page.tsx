@@ -8,7 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import SessionCreateModal from "@/components/SessionCreateModal";
-import { getSessionsList, SessionSnapshot } from "@/lib/actions";
+import {
+  getAnalyticsOverview,
+  getSessionsList,
+  SessionSnapshot,
+  AnalyticsOverview,
+} from "@/lib/actions";
 import { formatClock } from "@/lib/session";
 import {
   Clock,
@@ -22,16 +27,27 @@ import { cn } from "@/lib/utils";
 
 export default function DashboardPage() {
   const [sessions, setSessions] = useState<SessionSnapshot[]>([]);
+  const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const loadSessions = () => {
     startTransition(async () => {
-      const result = await getSessionsList();
-      if (result.error) {
-        setError(result.error);
+      const [sessionsResult, overviewResult] = await Promise.all([
+        getSessionsList(),
+        getAnalyticsOverview(),
+      ]);
+
+      if (sessionsResult.error) {
+        setError(sessionsResult.error);
       } else {
-        setSessions(result.sessions);
+        setSessions(sessionsResult.sessions);
+      }
+
+      if (overviewResult.error) {
+        setOverview(null);
+      } else {
+        setOverview(overviewResult.overview);
       }
     });
   };
@@ -41,16 +57,16 @@ export default function DashboardPage() {
   }, []);
 
   // Calculate stats from sessions
-  const totalSessions = sessions.length;
-  const activeSessions = sessions.filter(
+  const fallbackTotalSessions = sessions.length;
+  const fallbackActiveSessions = sessions.filter(
     (s) => s.status === "LIVE" || s.status === "PAUSED",
   ).length;
-  const todaySessions = sessions.filter((s) => {
+  const fallbackTodaySessions = sessions.filter((s) => {
     const createdAt = new Date(s.createdAt);
     const today = new Date();
     return createdAt.toDateString() === today.toDateString();
   }).length;
-  const avgDuration =
+  const fallbackAvgDuration =
     sessions.length > 0
       ? Math.round(
           sessions.reduce((acc, s) => acc + s.durationSeconds, 0) /
@@ -58,6 +74,19 @@ export default function DashboardPage() {
             60,
         )
       : 0;
+
+  const totalSessions = overview?.totalSessions ?? fallbackTotalSessions;
+  const activeSessions =
+    overview?.liveSessions != null && overview?.pausedSessions != null
+      ? overview.liveSessions + overview.pausedSessions
+      : fallbackActiveSessions;
+  const todaySessions = fallbackTodaySessions;
+  const avgDuration =
+    overview?.totalSessions && overview.totalSessions > 0
+      ? Math.round(
+          overview.totalSessionDurationSeconds / overview.totalSessions / 60,
+        )
+      : fallbackAvgDuration;
 
   const getStatusColor = (status: string) => {
     switch (status) {

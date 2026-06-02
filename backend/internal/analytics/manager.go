@@ -31,6 +31,30 @@ type SessionSummary struct {
 	ComputedAt             time.Time `json:"computedAt"`
 }
 
+// PlatformOverview is an aggregate analytics view across all sessions.
+type PlatformOverview struct {
+	TotalSessions            int       `json:"totalSessions"`
+	CreatedSessions          int       `json:"createdSessions"`
+	LiveSessions             int       `json:"liveSessions"`
+	PausedSessions           int       `json:"pausedSessions"`
+	EndedSessions            int       `json:"endedSessions"`
+	TotalProgramItems        int       `json:"totalProgramItems"`
+	EndedProgramItems        int       `json:"endedProgramItems"`
+	OnTimeEndedProgramItems  int       `json:"onTimeEndedProgramItems"`
+	OverrunProgramItems      int       `json:"overrunProgramItems"`
+	TotalSessionDurationSecs int       `json:"totalSessionDurationSeconds"`
+	TotalPlannedSeconds      int       `json:"totalPlannedSeconds"`
+	EffectiveBudgetSeconds   int       `json:"effectiveBudgetSeconds"`
+	TotalAdjustmentSeconds   int       `json:"totalAdjustmentSeconds"`
+	TotalPauseSeconds        int       `json:"totalPauseSeconds"`
+	TotalPauseCount          int       `json:"totalPauseCount"`
+	TotalOverrunSeconds      int       `json:"totalOverrunSeconds"`
+	TotalUnderrunSeconds     int       `json:"totalUnderrunSeconds"`
+	SessionCompletionRatio   float64   `json:"sessionCompletionRatio"`
+	ProgramItemOnTimeRatio   float64   `json:"programItemOnTimeRatio"`
+	ComputedAt               time.Time `json:"computedAt"`
+}
+
 // Manager computes analytics snapshots from existing domain snapshots.
 type Manager struct{}
 
@@ -83,6 +107,51 @@ func (m *Manager) BuildSessionSummary(sessionSnap session.Snapshot, items []prog
 	}
 
 	return summary
+}
+
+func (m *Manager) BuildPlatformOverview(sessions []session.Snapshot, itemsBySession map[string][]programitem.Snapshot, now time.Time) PlatformOverview {
+	overview := PlatformOverview{
+		TotalSessions: len(sessions),
+		ComputedAt:    now.UTC(),
+	}
+
+	for _, sessionSnap := range sessions {
+		overview.TotalSessionDurationSecs += sessionSnap.DurationSeconds
+
+		switch sessionSnap.Status {
+		case session.StatusCreated:
+			overview.CreatedSessions++
+		case session.StatusLive:
+			overview.LiveSessions++
+		case session.StatusPaused:
+			overview.PausedSessions++
+		case session.StatusEnded:
+			overview.EndedSessions++
+		}
+
+		summary := m.BuildSessionSummary(sessionSnap, itemsBySession[sessionSnap.ID], now)
+		overview.TotalProgramItems += summary.ProgramItemCount
+		overview.EndedProgramItems += summary.EndedCount
+		overview.OnTimeEndedProgramItems += summary.EndedOnTimeCount
+		overview.OverrunProgramItems += summary.OverrunItemCount
+		overview.TotalPlannedSeconds += summary.PlannedSeconds
+		overview.EffectiveBudgetSeconds += summary.EffectiveBudgetSeconds
+		overview.TotalAdjustmentSeconds += summary.TotalAdjustmentSeconds
+		overview.TotalPauseSeconds += summary.TotalPauseSeconds
+		overview.TotalPauseCount += summary.TotalPauseCount
+		overview.TotalOverrunSeconds += summary.TotalOverrunSeconds
+		overview.TotalUnderrunSeconds += summary.TotalUnderrunSeconds
+	}
+
+	if overview.TotalSessions > 0 {
+		overview.SessionCompletionRatio = float64(overview.EndedSessions) / float64(overview.TotalSessions)
+	}
+
+	if overview.EndedProgramItems > 0 {
+		overview.ProgramItemOnTimeRatio = float64(overview.OnTimeEndedProgramItems) / float64(overview.EndedProgramItems)
+	}
+
+	return overview
 }
 
 func plannedSeconds(item programitem.Snapshot) int {

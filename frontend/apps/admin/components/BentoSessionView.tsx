@@ -5,6 +5,7 @@ import {
   getSessionSnapshot,
   getProgramItems,
   getSessionLogs,
+  getSessionAnalytics,
   createProgramItem,
   cancelProgramItem,
   startProgramItem,
@@ -22,6 +23,7 @@ import {
   ProgramItemSnapshot,
   ProgramItemCreateInput,
   SessionLogSnapshot,
+  SessionAnalyticsSummary,
 } from "@/lib/actions";
 import { formatClock } from "@/lib/session";
 import { buildAdminWsUrl, getViewerUrl } from "@/lib/backend";
@@ -62,11 +64,15 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [programItems, setProgramItems] = useState<ProgramItemSnapshot[]>([]);
   const [sessionLogs, setSessionLogs] = useState<SessionLogSnapshot[]>([]);
+  const [analytics, setAnalytics] = useState<SessionAnalyticsSummary | null>(
+    null,
+  );
   const [controlToken, setControlToken] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [programItemError, setProgramItemError] = useState<string | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   // Load initial session and control token
@@ -75,13 +81,13 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     setControlToken(token);
 
     startTransition(async () => {
-      const [sessionResult, programItemsResult, logsResult] = await Promise.all(
-        [
+      const [sessionResult, programItemsResult, logsResult, analyticsResult] =
+        await Promise.all([
           getSessionSnapshot(sessionId),
           getProgramItems(sessionId),
           getSessionLogs(sessionId, { limit: 100, offset: 0 }),
-        ],
-      );
+          getSessionAnalytics(sessionId),
+        ]);
 
       if (sessionResult.error) {
         setLoadError(sessionResult.error);
@@ -100,6 +106,13 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
       } else {
         setLogError(null);
         setSessionLogs(logsResult.logs);
+      }
+
+      if (analyticsResult.error) {
+        setAnalyticsError(analyticsResult.error);
+      } else {
+        setAnalyticsError(null);
+        setAnalytics(analyticsResult.analytics);
       }
     });
   }, [sessionId]);
@@ -618,6 +631,58 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
             participationRate={88}
             attentionLevel="High"
           />
+
+          <Card className="col-span-12 md:col-span-6">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base sm:text-lg">
+                Analytics Snapshot
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 sm:space-y-4">
+              {analyticsError ? (
+                <div className="text-xs sm:text-sm text-destructive bg-destructive/10 p-2 sm:p-3 rounded">
+                  {analyticsError}
+                </div>
+              ) : analytics ? (
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-muted-foreground">Program Items</p>
+                    <p className="text-xl font-semibold">
+                      {analytics.programItemCount}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Ended On Time</p>
+                    <p className="text-xl font-semibold">
+                      {analytics.endedOnTimeCount}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Overrun (s)</p>
+                    <p className="text-xl font-semibold">
+                      {analytics.totalOverrunSeconds}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Pause Count</p>
+                    <p className="text-xl font-semibold">
+                      {analytics.totalPauseCount}
+                    </p>
+                  </div>
+                  <div className="col-span-2 pt-2 border-t">
+                    <p className="text-muted-foreground">On-Time Ratio</p>
+                    <p className="text-xl font-semibold">
+                      {(analytics.endedOnTimeRatio * 100).toFixed(1)}%
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Loading analytics...
+                </p>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Session Controls */}
           <Card className="col-span-12 md:col-span-6">
