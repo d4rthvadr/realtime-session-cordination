@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   getSessionSnapshot,
   getProgramItems,
+  getSessionLogs,
   createProgramItem,
   cancelProgramItem,
   startProgramItem,
@@ -20,9 +21,10 @@ import {
   RuntimeSnapshot,
   ProgramItemSnapshot,
   ProgramItemCreateInput,
+  SessionLogSnapshot,
 } from "@/lib/actions";
 import { formatClock } from "@/lib/session";
-import { getViewerUrl } from "@/lib/backend";
+import { buildAdminWsUrl, getViewerUrl } from "@/lib/backend";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,35 +61,13 @@ interface BentoSessionViewProps {
 export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [programItems, setProgramItems] = useState<ProgramItemSnapshot[]>([]);
+  const [sessionLogs, setSessionLogs] = useState<SessionLogSnapshot[]>([]);
   const [controlToken, setControlToken] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [programItemError, setProgramItemError] = useState<string | null>(null);
+  const [logError, setLogError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
-
-  // Mock data for demonstration - replace with real data
-  const mockLogs: LogEntry[] = [
-    {
-      timestamp: "14:02:11",
-      message: "System: Recording started automatically.",
-      type: "success",
-    },
-    {
-      timestamp: "14:05:45",
-      message: "User: Sarah Chen shared screen.",
-      type: "info",
-    },
-    {
-      timestamp: "14:12:02",
-      message: "Poll: '2024 Priorities' was published.",
-      type: "info",
-    },
-    {
-      timestamp: "14:25:30",
-      message: "Admin: Microphones muted globally by moderator.",
-      type: "warning",
-    },
-  ];
 
   // Load initial session and control token
   useEffect(() => {
@@ -95,10 +75,13 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     setControlToken(token);
 
     startTransition(async () => {
-      const [sessionResult, programItemsResult] = await Promise.all([
-        getSessionSnapshot(sessionId),
-        getProgramItems(sessionId),
-      ]);
+      const [sessionResult, programItemsResult, logsResult] = await Promise.all(
+        [
+          getSessionSnapshot(sessionId),
+          getProgramItems(sessionId),
+          getSessionLogs(sessionId, { limit: 100, offset: 0 }),
+        ],
+      );
 
       if (sessionResult.error) {
         setLoadError(sessionResult.error);
@@ -111,7 +94,79 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
       } else {
         setProgramItems(programItemsResult.programItems);
       }
+
+      if (logsResult.error) {
+        setLogError(logsResult.error);
+      } else {
+        setLogError(null);
+        setSessionLogs(logsResult.logs);
+      }
     });
+  }, [sessionId]);
+
+  useEffect(() => {
+    let socket: WebSocket | null = null;
+    let closed = false;
+
+    try {
+      socket = new WebSocket(buildAdminWsUrl(`/ws/sessions/${sessionId}`));
+    } catch {
+      return;
+    }
+
+    socket.onmessage = (event) => {
+      if (closed) {
+        return;
+      }
+
+      try {
+        const payload = JSON.parse(String(event.data)) as {
+          event?: string;
+          sessionLog?: SessionLogSnapshot;
+        };
+
+        if (payload.event !== "session_log_appended" || !payload.sessionLog) {
+          return;
+        }
+
+        const appendedLog = payload.sessionLog;
+
+        setSessionLogs((current) => {
+          const exists = current.some((entry) => entry.id === appendedLog.id);
+          if (exists) {
+            return current;
+          }
+
+          const merged: SessionLogSnapshot[] = [appendedLog, ...current];
+          merged.sort((a, b) => {
+            const tA = Date.parse(a.occurredAt);
+            const tB = Date.parse(b.occurredAt);
+            if (tA !== tB) {
+              return tB - tA;
+            }
+
+            const cA = Date.parse(a.createdAt);
+            const cB = Date.parse(b.createdAt);
+            if (cA !== cB) {
+              return cB - cA;
+            }
+
+            return b.id.localeCompare(a.id);
+          });
+
+          return merged.slice(0, 200);
+        });
+      } catch {
+        // Ignore non-log websocket payloads.
+      }
+    };
+
+    return () => {
+      closed = true;
+      if (socket) {
+        socket.close();
+      }
+    };
   }, [sessionId]);
 
   // Keep runtime countdown smooth between server updates.
@@ -149,6 +204,56 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
   }, [runtime]);
 
   const viewerLink = useMemo(() => getViewerUrl(sessionId), [sessionId]);
+
+  const logEntries = useMemo<LogEntry[]>(() => {
+    return sessionLogs.map((entry) => ({
+      timestamp: formatLogTime(entry.occurredAt),
+      message: entry.message,
+      type: logTypeFromEvent(entry.eventType),
+    }));
+  }, [sessionLogs]);
+
+  const handleExportLogs = () => {
+    if (sessionLogs.length === 0) {
+      return;
+    }
+
+    const header = [
+      "id",
+      "sessionId",
+      "programItemId",
+      "eventType",
+      "message",
+      "occurredAt",
+      "createdAt",
+      "requestId",
+      "metadata",
+    ];
+
+    const rows = sessionLogs.map((entry) => [
+      entry.id,
+      entry.sessionId,
+      entry.programItemId ?? "",
+      entry.eventType,
+      entry.message,
+      entry.occurredAt,
+      entry.createdAt,
+      entry.requestId ?? "",
+      JSON.stringify(entry.metadata ?? {}),
+    ]);
+
+    const csv = [header, ...rows]
+      .map((row) => row.map((field) => csvEscape(field)).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${sessionId}-session-logs.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
   const handleAction = async (
     action: (
@@ -527,6 +632,11 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
                   {actionError}
                 </div>
               )}
+              {logError && (
+                <div className="text-xs sm:text-sm text-destructive bg-destructive/10 p-2 sm:p-3 rounded">
+                  {logError}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-2">
                 <Button
@@ -648,12 +758,45 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
             runtimeEnabled={isProgramItemRuntimeAllowed}
           />
 
-          <SessionLog
-            entries={mockLogs}
-            onExport={() => console.log("Export logs")}
-          />
+          <SessionLog entries={logEntries} onExport={handleExportLogs} />
         </div>
       </main>
     </div>
   );
+}
+
+function formatLogTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "--:--:--";
+  }
+
+  return parsed.toLocaleTimeString([], {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function logTypeFromEvent(eventType: string): LogEntry["type"] {
+  if (eventType.includes("ENDED") || eventType.includes("CANCELED")) {
+    return "warning";
+  }
+  if (eventType.includes("FAILED") || eventType.includes("ERROR")) {
+    return "error";
+  }
+  if (
+    eventType.includes("STARTED") ||
+    eventType.includes("RESUMED") ||
+    eventType.includes("CREATED")
+  ) {
+    return "success";
+  }
+  return "info";
+}
+
+function csvEscape(value: unknown): string {
+  const stringValue = String(value ?? "");
+  return `"${stringValue.replace(/"/g, '""')}"`;
 }
