@@ -1,6 +1,7 @@
 package sessionlog
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -15,12 +16,16 @@ type SqliteStore struct {
 }
 
 func NewSqliteStore(dbPath string) (*SqliteStore, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on", dbPath)
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite db: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 
-	if err = db.Ping(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err = db.PingContext(ctx); err != nil {
 		return nil, fmt.Errorf("failed to ping sqlite db: %w", err)
 	}
 
