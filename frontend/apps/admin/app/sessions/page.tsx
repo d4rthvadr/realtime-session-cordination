@@ -97,7 +97,7 @@ export default function SessionsListPage() {
                       Time Remaining
                     </p>
                     <p className="text-xl font-bold text-slate-900">
-                      {formatClock(session.remainingSeconds)}
+                      {formatClock(session.durationSeconds)}
                     </p>
                   </div>
                 </div>

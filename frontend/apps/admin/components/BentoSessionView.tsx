@@ -32,11 +32,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
+import {
   ArrowLeft,
-  MicOff,
-  Share2,
-  Radio,
-  MoreHorizontal,
   Play,
   Pause as PauseIcon,
   Square,
@@ -45,15 +47,19 @@ import {
   Minus,
   ExternalLink,
 } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  XAxis,
+} from "recharts";
 
 // Import widgets
 import TimerWidget from "@/components/widgets/TimerWidget";
 import AttendeeStats from "@/components/widgets/AttendeeStats";
-import StatusCard, {
-  SignalIcon,
-  CPUIcon,
-} from "@/components/widgets/StatusCard";
-import QuickActions from "@/components/widgets/QuickActions";
 import SessionLog, { LogEntry } from "@/components/widgets/SessionLog";
 import AgendaProgress from "@/components/widgets/AgendaProgress";
 
@@ -502,32 +508,6 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     });
   };
 
-  const quickActions = [
-    {
-      icon: <MicOff className="w-6 h-6" />,
-      label: "Mute All",
-      onClick: () => console.log("Mute all"),
-      variant: "danger" as const,
-    },
-    {
-      icon: <Share2 className="w-6 h-6" />,
-      label: "Share Feed",
-      onClick: () => console.log("Share feed"),
-      variant: "primary" as const,
-    },
-    {
-      icon: <Radio className="w-6 h-6" />,
-      label: "Broadcast",
-      onClick: () => console.log("Broadcast"),
-      variant: "primary" as const,
-    },
-    {
-      icon: <MoreHorizontal className="w-6 h-6" />,
-      label: "More",
-      onClick: () => console.log("More options"),
-    },
-  ];
-
   if (loadError) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -572,6 +552,66 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
         100
       : 0;
 
+  const fallbackAnalytics = buildFallbackAnalytics(session, programItems);
+  const effectiveAnalytics = analytics ?? fallbackAnalytics;
+
+  const statusChartData = [
+    {
+      key: "scheduled",
+      label: "Scheduled",
+      value: effectiveAnalytics.scheduledCount,
+    },
+    {
+      key: "inProgress",
+      label: "In Progress",
+      value: effectiveAnalytics.inProgressCount,
+    },
+    { key: "paused", label: "Paused", value: effectiveAnalytics.pausedCount },
+    { key: "ended", label: "Ended", value: effectiveAnalytics.endedCount },
+    {
+      key: "canceled",
+      label: "Canceled",
+      value: effectiveAnalytics.canceledCount,
+    },
+  ];
+
+  const unresolvedEnded = Math.max(
+    0,
+    effectiveAnalytics.endedCount -
+      effectiveAnalytics.endedOnTimeCount -
+      effectiveAnalytics.overrunItemCount,
+  );
+
+  const timingChartData = [
+    {
+      key: "onTime",
+      label: "On Time",
+      value: effectiveAnalytics.endedOnTimeCount,
+    },
+    {
+      key: "overrun",
+      label: "Overrun",
+      value: effectiveAnalytics.overrunItemCount,
+    },
+    { key: "unknown", label: "Unknown", value: unresolvedEnded },
+  ].filter((item) => item.value > 0);
+
+  const statusChartConfig = {
+    value: { label: "Count" },
+    scheduled: { label: "Scheduled", color: "hsl(var(--chart-1))" },
+    inProgress: { label: "In Progress", color: "hsl(var(--chart-2))" },
+    paused: { label: "Paused", color: "hsl(var(--chart-4))" },
+    ended: { label: "Ended", color: "hsl(var(--chart-3))" },
+    canceled: { label: "Canceled", color: "hsl(var(--chart-5))" },
+  } satisfies ChartConfig;
+
+  const timingChartConfig = {
+    value: { label: "Items" },
+    onTime: { label: "On Time", color: "hsl(var(--chart-2))" },
+    overrun: { label: "Overrun", color: "hsl(var(--chart-1))" },
+    unknown: { label: "Unknown", color: "hsl(var(--muted-foreground))" },
+  } satisfies ChartConfig;
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -615,9 +655,19 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
       {/* Main Content - Bento Grid */}
       <main className="container mx-auto px-4 sm:px-6 py-4 sm:py-8">
         <Tabs defaultValue="dashboard" className="w-full">
-          <TabsList className="grid w-full max-w-md grid-cols-2">
-            <TabsTrigger value="dashboard">Session Dashboard</TabsTrigger>
-            <TabsTrigger value="insights">Insights</TabsTrigger>
+          <TabsList className="h-auto w-full justify-start gap-6 rounded-none border-b border-slate-200 bg-transparent p-0 text-slate-600">
+            <TabsTrigger
+              value="dashboard"
+              className="rounded-none border-b-2 border-transparent px-1.5 pb-3 pt-0 text-sm font-semibold shadow-none data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none"
+            >
+              Session Dashboard
+            </TabsTrigger>
+            <TabsTrigger
+              value="insights"
+              className="rounded-none border-b-2 border-transparent px-1.5 pb-3 pt-0 text-sm font-semibold shadow-none data-[state=active]:border-blue-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none"
+            >
+              Insights
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="dashboard" className="mt-4">
@@ -786,33 +836,28 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
           </TabsContent>
 
           <TabsContent value="insights" className="mt-4">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base sm:text-lg">
-                  Analytics Snapshot
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 sm:space-y-4">
-                {analyticsError ? (
-                  <div className="text-xs sm:text-sm text-destructive bg-destructive/10 p-2 sm:p-3 rounded">
-                    {analyticsError}
-                  </div>
-                ) : analytics ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-12 gap-3 sm:gap-4">
+              <Card className="col-span-12">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base sm:text-lg">
+                    Analytics Snapshot
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 sm:space-y-4">
+                  {analyticsError ? (
+                    <div className="text-xs sm:text-sm text-amber-700 bg-amber-50 border border-amber-200 p-2 sm:p-3 rounded">
+                      {analyticsError}. Showing live fallback insights from
+                      current session state.
+                    </div>
+                  ) : null}
+
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div className="rounded-lg border p-4">
                       <p className="text-sm text-muted-foreground">
                         Program Items
                       </p>
                       <p className="text-2xl font-semibold mt-1">
-                        {analytics.programItemCount}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border p-4">
-                      <p className="text-sm text-muted-foreground">
-                        Ended On Time
-                      </p>
-                      <p className="text-2xl font-semibold mt-1">
-                        {analytics.endedOnTimeCount}
+                        {effectiveAnalytics.programItemCount}
                       </p>
                     </div>
                     <div className="rounded-lg border p-4">
@@ -820,42 +865,106 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
                         On-Time Ratio
                       </p>
                       <p className="text-2xl font-semibold mt-1">
-                        {(analytics.endedOnTimeRatio * 100).toFixed(1)}%
+                        {(effectiveAnalytics.endedOnTimeRatio * 100).toFixed(1)}
+                        %
                       </p>
                     </div>
-
                     <div className="rounded-lg border p-4">
                       <p className="text-sm text-muted-foreground">
                         Overrun (s)
                       </p>
                       <p className="text-2xl font-semibold mt-1">
-                        {analytics.totalOverrunSeconds}
+                        {effectiveAnalytics.totalOverrunSeconds}
                       </p>
                     </div>
                     <div className="rounded-lg border p-4">
                       <p className="text-sm text-muted-foreground">
-                        Underrun (s)
+                        Pause Count
                       </p>
                       <p className="text-2xl font-semibold mt-1">
-                        {analytics.totalUnderrunSeconds}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border p-4">
-                      <p className="text-sm text-muted-foreground">
-                        Total Pauses
-                      </p>
-                      <p className="text-2xl font-semibold mt-1">
-                        {analytics.totalPauseCount}
+                        {effectiveAnalytics.totalPauseCount}
                       </p>
                     </div>
                   </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Loading analytics...
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+
+              <Card className="col-span-12 lg:col-span-7">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">
+                    Program Item Status Mix
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ChartContainer
+                    config={statusChartConfig}
+                    className="h-[300px] w-full"
+                  >
+                    <BarChart data={statusChartData}>
+                      <CartesianGrid vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        tickLine={false}
+                        axisLine={false}
+                        tickMargin={8}
+                      />
+                      <ChartTooltip content={<ChartTooltipContent />} />
+                      <Bar dataKey="value" radius={8}>
+                        {statusChartData.map((entry) => (
+                          <Cell
+                            key={entry.key}
+                            fill={`var(--color-${entry.key})`}
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ChartContainer>
+                </CardContent>
+              </Card>
+
+              <Card className="col-span-12 lg:col-span-5">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">
+                    Ended Item Outcomes
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ChartContainer
+                    config={timingChartConfig}
+                    className="h-[300px] w-full"
+                  >
+                    <PieChart>
+                      <ChartTooltip
+                        content={<ChartTooltipContent hideLabel />}
+                      />
+                      <Pie
+                        data={timingChartData}
+                        dataKey="value"
+                        nameKey="label"
+                        innerRadius={70}
+                        outerRadius={110}
+                        strokeWidth={4}
+                      >
+                        {timingChartData.map((entry) => (
+                          <Cell
+                            key={entry.key}
+                            fill={`var(--color-${entry.key})`}
+                          />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  </ChartContainer>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs sm:text-sm">
+                    {timingChartData.map((entry) => (
+                      <div key={entry.key} className="rounded border p-2">
+                        <p className="text-muted-foreground">{entry.label}</p>
+                        <p className="font-semibold mt-0.5">{entry.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
         </Tabs>
       </main>
@@ -897,4 +1006,83 @@ function logTypeFromEvent(eventType: string): LogEntry["type"] {
 function csvEscape(value: unknown): string {
   const stringValue = String(value ?? "");
   return `"${stringValue.replace(/"/g, '""')}"`;
+}
+
+function buildFallbackAnalytics(
+  session: RuntimeSnapshot["session"],
+  items: ProgramItemSnapshot[],
+): SessionAnalyticsSummary {
+  let scheduledCount = 0;
+  let inProgressCount = 0;
+  let pausedCount = 0;
+  let endedCount = 0;
+  let canceledCount = 0;
+  let plannedSeconds = 0;
+  let effectiveBudgetSeconds = 0;
+  let totalAdjustmentSeconds = 0;
+  let totalPauseSeconds = 0;
+  let totalPauseCount = 0;
+  let endedOnTimeCount = 0;
+  let overrunItemCount = 0;
+  let totalOverrunSeconds = 0;
+  let totalUnderrunSeconds = 0;
+
+  for (const item of items) {
+    plannedSeconds += item.runtimeDurationSeconds;
+    effectiveBudgetSeconds +=
+      item.runtimeDurationSeconds + item.adjustmentSeconds;
+    totalAdjustmentSeconds += item.adjustmentSeconds;
+    totalPauseSeconds += item.totalPausedDurationSeconds;
+    totalPauseCount += item.pauseCount;
+
+    switch (item.status) {
+      case "scheduled":
+        scheduledCount++;
+        break;
+      case "in_progress":
+        inProgressCount++;
+        break;
+      case "paused":
+        pausedCount++;
+        break;
+      case "ended":
+        endedCount++;
+        if (typeof item.endedRemainingSeconds === "number") {
+          if (item.endedRemainingSeconds >= 0) {
+            endedOnTimeCount++;
+            totalUnderrunSeconds += item.endedRemainingSeconds;
+          } else {
+            overrunItemCount++;
+            totalOverrunSeconds += -item.endedRemainingSeconds;
+          }
+        }
+        break;
+      case "canceled":
+        canceledCount++;
+        break;
+    }
+  }
+
+  return {
+    sessionId: session.id,
+    sessionStatus: session.status,
+    sessionDurationSeconds: session.durationSeconds,
+    programItemCount: items.length,
+    scheduledCount,
+    inProgressCount,
+    pausedCount,
+    endedCount,
+    canceledCount,
+    plannedSeconds,
+    effectiveBudgetSeconds,
+    totalAdjustmentSeconds,
+    totalPauseSeconds,
+    totalPauseCount,
+    endedOnTimeCount,
+    overrunItemCount,
+    totalOverrunSeconds,
+    totalUnderrunSeconds,
+    endedOnTimeRatio: endedCount > 0 ? endedOnTimeCount / endedCount : 0,
+    computedAt: new Date().toISOString(),
+  };
 }

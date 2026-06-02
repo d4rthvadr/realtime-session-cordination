@@ -141,7 +141,7 @@ export default function SessionsListPage() {
                         {formatClock(session.durationSeconds, "00:00")}
                       </td>
                       <td className="p-4 text-sm text-slate-700 font-mono">
-                        {formatClock(session.remainingSeconds, "00:00")}
+                        {formatClock(session.durationSeconds, "00:00")}
                       </td>
                       <td className="p-4 text-sm text-slate-500">
                         {new Date(session.createdAt).toLocaleDateString()}
