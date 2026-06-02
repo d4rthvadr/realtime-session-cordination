@@ -30,6 +30,7 @@ import { buildAdminWsUrl, getViewerUrl } from "@/lib/backend";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   ArrowLeft,
   MicOff,
@@ -613,218 +614,250 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
 
       {/* Main Content - Bento Grid */}
       <main className="container mx-auto px-4 sm:px-6 py-4 sm:py-8">
-        <div className="grid grid-cols-12 gap-3 sm:gap-4">
-          {/* Top Row: Timer + Attendee Stats */}
-          <TimerWidget
-            currentTime={currentTime}
-            totalTime={totalTime}
-            progress={progress}
-            status={session.status as "CREATED" | "LIVE" | "PAUSED" | "ENDED"}
-            onPause={() =>
-              canPause &&
-              handleAction((token) => pauseSession(sessionId, token))
-            }
-            onRefresh={() => window.location.reload()}
-          />
-          <AttendeeStats
-            totalOnline={124}
-            participationRate={88}
-            attentionLevel="High"
-          />
+        <Tabs defaultValue="dashboard" className="w-full">
+          <TabsList className="grid w-full max-w-md grid-cols-2">
+            <TabsTrigger value="dashboard">Session Dashboard</TabsTrigger>
+            <TabsTrigger value="insights">Insights</TabsTrigger>
+          </TabsList>
 
-          <Card className="col-span-12 md:col-span-6">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base sm:text-lg">
-                Analytics Snapshot
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 sm:space-y-4">
-              {analyticsError ? (
-                <div className="text-xs sm:text-sm text-destructive bg-destructive/10 p-2 sm:p-3 rounded">
-                  {analyticsError}
-                </div>
-              ) : analytics ? (
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p className="text-muted-foreground">Program Items</p>
-                    <p className="text-xl font-semibold">
-                      {analytics.programItemCount}
-                    </p>
+          <TabsContent value="dashboard" className="mt-4">
+            <div className="grid grid-cols-12 gap-3 sm:gap-4">
+              {/* Top Row: Timer + Attendee Stats */}
+              <TimerWidget
+                currentTime={currentTime}
+                totalTime={totalTime}
+                progress={progress}
+                status={
+                  session.status as "CREATED" | "LIVE" | "PAUSED" | "ENDED"
+                }
+                onPause={() =>
+                  canPause &&
+                  handleAction((token) => pauseSession(sessionId, token))
+                }
+                onRefresh={() => window.location.reload()}
+              />
+              <AttendeeStats
+                totalOnline={124}
+                participationRate={88}
+                attentionLevel="High"
+              />
+
+              {/* Session Controls */}
+              <Card className="col-span-12 md:col-span-6">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base sm:text-lg">
+                    Session Controls
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 sm:space-y-4">
+                  {actionError && (
+                    <div className="text-xs sm:text-sm text-destructive bg-destructive/10 p-2 sm:p-3 rounded">
+                      {actionError}
+                    </div>
+                  )}
+                  {logError && (
+                    <div className="text-xs sm:text-sm text-destructive bg-destructive/10 p-2 sm:p-3 rounded">
+                      {logError}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      disabled={!canStart || isPending}
+                      onClick={() =>
+                        handleAction((token) => startSession(sessionId, token))
+                      }
+                      className="bg-emerald-600 hover:bg-emerald-700 rounded-full h-10 sm:h-11"
+                    >
+                      <Play className="w-4 h-4 mr-2" />
+                      <span className="text-sm sm:text-base">Start</span>
+                    </Button>
+                    <Button
+                      disabled={!canPause || isPending}
+                      onClick={() =>
+                        handleAction((token) => pauseSession(sessionId, token))
+                      }
+                      className="bg-amber-500 hover:bg-amber-600 rounded-full h-10 sm:h-11"
+                    >
+                      <PauseIcon className="w-4 h-4 mr-2" />
+                      <span className="text-sm sm:text-base">Pause</span>
+                    </Button>
+                    <Button
+                      disabled={!canResume || isPending}
+                      onClick={() =>
+                        handleAction((token) => resumeSession(sessionId, token))
+                      }
+                      className="bg-sky-600 hover:bg-sky-700 rounded-full h-10 sm:h-11"
+                    >
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      <span className="text-sm sm:text-base">Resume</span>
+                    </Button>
+                    <Button
+                      disabled={!canEnd || isPending}
+                      onClick={() =>
+                        handleAction((token) => endSession(sessionId, token))
+                      }
+                      variant="destructive"
+                      className="rounded-full h-10 sm:h-11"
+                    >
+                      <Square className="w-4 h-4 mr-2" />
+                      <span className="text-sm sm:text-base">End</span>
+                    </Button>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground">Ended On Time</p>
-                    <p className="text-xl font-semibold">
-                      {analytics.endedOnTimeCount}
+
+                  <div className="pt-2 border-t">
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Time Adjustment
                     </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        disabled={isPending}
+                        onClick={() =>
+                          handleAction((token) =>
+                            adjustSessionTime(
+                              sessionId,
+                              { deltaSeconds: 60 },
+                              token,
+                            ),
+                          )
+                        }
+                        variant="outline"
+                        size="sm"
+                        className="rounded-full"
+                      >
+                        <Plus className="w-4 h-4 mr-1" />
+                        60s
+                      </Button>
+                      <Button
+                        disabled={isPending}
+                        onClick={() =>
+                          handleAction((token) =>
+                            adjustSessionTime(
+                              sessionId,
+                              { deltaSeconds: -60 },
+                              token,
+                            ),
+                          )
+                        }
+                        variant="outline"
+                        size="sm"
+                        className="rounded-full"
+                      >
+                        <Minus className="w-4 h-4 mr-1" />
+                        60s
+                      </Button>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground">Overrun (s)</p>
-                    <p className="text-xl font-semibold">
-                      {analytics.totalOverrunSeconds}
+
+                  <div className="pt-2 border-t">
+                    <p className="text-xs text-muted-foreground mb-1">
+                      Viewer Link
                     </p>
+                    <a
+                      href={viewerLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-primary hover:underline flex items-center gap-1 break-all leading-relaxed"
+                    >
+                      <span className="break-all">{viewerLink}</span>
+                      <ExternalLink className="w-3 h-3 flex-shrink-0 inline-block" />
+                    </a>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground">Pause Count</p>
-                    <p className="text-xl font-semibold">
-                      {analytics.totalPauseCount}
-                    </p>
+                </CardContent>
+              </Card>
+
+              <AgendaProgress
+                items={programItems}
+                isPending={isPending}
+                error={programItemError}
+                onCreateAction={handleCreateProgramItem}
+                onCancelAction={handleCancelProgramItem}
+                onStartAction={handleStartProgramItem}
+                onPauseAction={handlePauseProgramItem}
+                onResumeAction={handleResumeProgramItem}
+                onEndAction={handleEndProgramItem}
+                onAdjustTimeAction={handleAdjustProgramItemTime}
+                onReorderAction={handleReorderProgramItems}
+                runtimeEnabled={isProgramItemRuntimeAllowed}
+              />
+
+              <SessionLog entries={logEntries} onExport={handleExportLogs} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="insights" className="mt-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base sm:text-lg">
+                  Analytics Snapshot
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 sm:space-y-4">
+                {analyticsError ? (
+                  <div className="text-xs sm:text-sm text-destructive bg-destructive/10 p-2 sm:p-3 rounded">
+                    {analyticsError}
                   </div>
-                  <div className="col-span-2 pt-2 border-t">
-                    <p className="text-muted-foreground">On-Time Ratio</p>
-                    <p className="text-xl font-semibold">
-                      {(analytics.endedOnTimeRatio * 100).toFixed(1)}%
-                    </p>
+                ) : analytics ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="rounded-lg border p-4">
+                      <p className="text-sm text-muted-foreground">
+                        Program Items
+                      </p>
+                      <p className="text-2xl font-semibold mt-1">
+                        {analytics.programItemCount}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border p-4">
+                      <p className="text-sm text-muted-foreground">
+                        Ended On Time
+                      </p>
+                      <p className="text-2xl font-semibold mt-1">
+                        {analytics.endedOnTimeCount}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border p-4">
+                      <p className="text-sm text-muted-foreground">
+                        On-Time Ratio
+                      </p>
+                      <p className="text-2xl font-semibold mt-1">
+                        {(analytics.endedOnTimeRatio * 100).toFixed(1)}%
+                      </p>
+                    </div>
+
+                    <div className="rounded-lg border p-4">
+                      <p className="text-sm text-muted-foreground">
+                        Overrun (s)
+                      </p>
+                      <p className="text-2xl font-semibold mt-1">
+                        {analytics.totalOverrunSeconds}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border p-4">
+                      <p className="text-sm text-muted-foreground">
+                        Underrun (s)
+                      </p>
+                      <p className="text-2xl font-semibold mt-1">
+                        {analytics.totalUnderrunSeconds}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border p-4">
+                      <p className="text-sm text-muted-foreground">
+                        Total Pauses
+                      </p>
+                      <p className="text-2xl font-semibold mt-1">
+                        {analytics.totalPauseCount}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Loading analytics...
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Session Controls */}
-          <Card className="col-span-12 md:col-span-6">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base sm:text-lg">
-                Session Controls
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 sm:space-y-4">
-              {actionError && (
-                <div className="text-xs sm:text-sm text-destructive bg-destructive/10 p-2 sm:p-3 rounded">
-                  {actionError}
-                </div>
-              )}
-              {logError && (
-                <div className="text-xs sm:text-sm text-destructive bg-destructive/10 p-2 sm:p-3 rounded">
-                  {logError}
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  disabled={!canStart || isPending}
-                  onClick={() =>
-                    handleAction((token) => startSession(sessionId, token))
-                  }
-                  className="bg-emerald-600 hover:bg-emerald-700 rounded-full h-10 sm:h-11"
-                >
-                  <Play className="w-4 h-4 mr-2" />
-                  <span className="text-sm sm:text-base">Start</span>
-                </Button>
-                <Button
-                  disabled={!canPause || isPending}
-                  onClick={() =>
-                    handleAction((token) => pauseSession(sessionId, token))
-                  }
-                  className="bg-amber-500 hover:bg-amber-600 rounded-full h-10 sm:h-11"
-                >
-                  <PauseIcon className="w-4 h-4 mr-2" />
-                  <span className="text-sm sm:text-base">Pause</span>
-                </Button>
-                <Button
-                  disabled={!canResume || isPending}
-                  onClick={() =>
-                    handleAction((token) => resumeSession(sessionId, token))
-                  }
-                  className="bg-sky-600 hover:bg-sky-700 rounded-full h-10 sm:h-11"
-                >
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  <span className="text-sm sm:text-base">Resume</span>
-                </Button>
-                <Button
-                  disabled={!canEnd || isPending}
-                  onClick={() =>
-                    handleAction((token) => endSession(sessionId, token))
-                  }
-                  variant="destructive"
-                  className="rounded-full h-10 sm:h-11"
-                >
-                  <Square className="w-4 h-4 mr-2" />
-                  <span className="text-sm sm:text-base">End</span>
-                </Button>
-              </div>
-
-              <div className="pt-2 border-t">
-                <p className="text-xs text-muted-foreground mb-2">
-                  Time Adjustment
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    disabled={isPending}
-                    onClick={() =>
-                      handleAction((token) =>
-                        adjustSessionTime(
-                          sessionId,
-                          { deltaSeconds: 60 },
-                          token,
-                        ),
-                      )
-                    }
-                    variant="outline"
-                    size="sm"
-                    className="rounded-full"
-                  >
-                    <Plus className="w-4 h-4 mr-1" />
-                    60s
-                  </Button>
-                  <Button
-                    disabled={isPending}
-                    onClick={() =>
-                      handleAction((token) =>
-                        adjustSessionTime(
-                          sessionId,
-                          { deltaSeconds: -60 },
-                          token,
-                        ),
-                      )
-                    }
-                    variant="outline"
-                    size="sm"
-                    className="rounded-full"
-                  >
-                    <Minus className="w-4 h-4 mr-1" />
-                    60s
-                  </Button>
-                </div>
-              </div>
-
-              <div className="pt-2 border-t">
-                <p className="text-xs text-muted-foreground mb-1">
-                  Viewer Link
-                </p>
-                <a
-                  href={viewerLink}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-xs text-primary hover:underline flex items-center gap-1 break-all leading-relaxed"
-                >
-                  <span className="break-all">{viewerLink}</span>
-                  <ExternalLink className="w-3 h-3 flex-shrink-0 inline-block" />
-                </a>
-              </div>
-            </CardContent>
-          </Card>
-
-          <AgendaProgress
-            items={programItems}
-            isPending={isPending}
-            error={programItemError}
-            onCreateAction={handleCreateProgramItem}
-            onCancelAction={handleCancelProgramItem}
-            onStartAction={handleStartProgramItem}
-            onPauseAction={handlePauseProgramItem}
-            onResumeAction={handleResumeProgramItem}
-            onEndAction={handleEndProgramItem}
-            onAdjustTimeAction={handleAdjustProgramItemTime}
-            onReorderAction={handleReorderProgramItems}
-            runtimeEnabled={isProgramItemRuntimeAllowed}
-          />
-
-          <SessionLog entries={logEntries} onExport={handleExportLogs} />
-        </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Loading analytics...
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   );
