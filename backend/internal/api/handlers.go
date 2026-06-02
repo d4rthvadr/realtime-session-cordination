@@ -143,6 +143,14 @@ func (h *Handler) createSession(c *gin.Context) {
 		return
 	}
 
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: snap.ID,
+		EventType: sessionlog.SessionCreated,
+		MessageInput: sessionlog.MessageInput{
+			SessionTitle: snap.Title,
+		},
+	})
+
 	c.JSON(http.StatusCreated, gin.H{
 		"session":      snap,
 		"controlToken": token,
@@ -253,6 +261,16 @@ func (h *Handler) createProgramItem(c *gin.Context) {
 		return
 	}
 
+	programItemID := snap.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     sessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemCreated,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: snap.Title,
+		},
+	})
+
 	h.broadcastProgramItemEvent(sessionID, programitem.Event{
 		Type:        programitem.EventCreated,
 		SessionID:   sessionID,
@@ -318,6 +336,16 @@ func (h *Handler) updateProgramItem(c *gin.Context) {
 		return
 	}
 
+	programItemID := snap.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemUpdated,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: snap.Title,
+		},
+	})
+
 	h.broadcastProgramItemEvent(item.SessionID, programitem.Event{
 		Type:        programitem.EventUpdated,
 		SessionID:   item.SessionID,
@@ -348,6 +376,16 @@ func (h *Handler) cancelProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+
+	programItemID := snap.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemCanceled,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: snap.Title,
+		},
+	})
 
 	h.broadcastProgramItemEvent(item.SessionID, programitem.Event{
 		Type:        programitem.EventCanceled,
@@ -397,6 +435,16 @@ func (h *Handler) startProgramItem(c *gin.Context) {
 		return
 	}
 
+	programItemID := item.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemStarted,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: item.Title,
+		},
+	})
+
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
@@ -439,6 +487,16 @@ func (h *Handler) endProgramItem(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
+
+	programItemID := item.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemEnded,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: item.Title,
+		},
+	})
 
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
@@ -493,6 +551,27 @@ func (h *Handler) pauseProgramItem(c *gin.Context) {
 	})
 	if c.IsAborted() {
 		return
+	}
+
+	programItemID := item.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemPaused,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: item.Title,
+		},
+	})
+
+	if event.Session.Status == session.StatusPaused {
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID: item.SessionID,
+			EventType: sessionlog.SessionPaused,
+			MessageInput: sessionlog.MessageInput{
+				SessionTitle: event.Session.Title,
+			},
+			Metadata: map[string]any{"source": "program_item_pause"},
+		})
 	}
 
 	c.JSON(http.StatusOK, event)
@@ -550,6 +629,27 @@ func (h *Handler) resumeProgramItem(c *gin.Context) {
 		return
 	}
 
+	programItemID := item.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemResumed,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: item.Title,
+		},
+	})
+
+	if event.Session.Status == session.StatusLive {
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID: item.SessionID,
+			EventType: sessionlog.SessionResumed,
+			MessageInput: sessionlog.MessageInput{
+				SessionTitle: event.Session.Title,
+			},
+			Metadata: map[string]any{"source": "program_item_resume"},
+		})
+	}
+
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
@@ -600,6 +700,18 @@ func (h *Handler) adjustProgramItemTime(c *gin.Context) {
 		return
 	}
 
+	programItemID := item.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemTimeAdjusted,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: item.Title,
+			DeltaSeconds:     body.DeltaSeconds,
+		},
+		Metadata: map[string]any{"deltaSeconds": body.DeltaSeconds},
+	})
+
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
@@ -630,6 +742,15 @@ func (h *Handler) reorderProgramItems(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: sessionID,
+		EventType: sessionlog.ProgramItemsReordered,
+		MessageInput: sessionlog.MessageInput{
+			ReorderedItemCount: len(body.Items),
+		},
+		Metadata: map[string]any{"reorderedItemCount": len(body.Items)},
+	})
 
 	h.broadcastProgramItemEvent(sessionID, programitem.Event{
 		Type:         programitem.EventReordered,
@@ -667,6 +788,14 @@ func (h *Handler) startSession(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: id,
+		EventType: sessionlog.SessionStarted,
+		MessageInput: sessionlog.MessageInput{
+			SessionTitle: envelope.Session.Title,
+		},
+	})
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -712,6 +841,27 @@ func (h *Handler) pauseSession(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: id,
+		EventType: sessionlog.SessionPaused,
+		MessageInput: sessionlog.MessageInput{
+			SessionTitle: envelope.Session.Title,
+		},
+	})
+
+	if envelope.ProgramItem != nil {
+		programItemID := envelope.ProgramItem.ID
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID:     id,
+			ProgramItemID: &programItemID,
+			EventType:     sessionlog.CascadeProgramItemPausedBySession,
+			MessageInput: sessionlog.MessageInput{
+				ProgramItemTitle: envelope.ProgramItem.Title,
+			},
+		})
+	}
+
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -757,6 +907,27 @@ func (h *Handler) resumeSession(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: id,
+		EventType: sessionlog.SessionResumed,
+		MessageInput: sessionlog.MessageInput{
+			SessionTitle: envelope.Session.Title,
+		},
+	})
+
+	if envelope.ProgramItem != nil {
+		programItemID := envelope.ProgramItem.ID
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID:     id,
+			ProgramItemID: &programItemID,
+			EventType:     sessionlog.CascadeProgramItemResumedBySession,
+			MessageInput: sessionlog.MessageInput{
+				ProgramItemTitle: envelope.ProgramItem.Title,
+			},
+		})
+	}
+
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -769,6 +940,8 @@ func (h *Handler) endSession(c *gin.Context) {
 
 	var eventType string
 	var envelope runtimeEnvelope
+	var cascadedProgramItemID *string
+	var cascadedProgramItemTitle string
 	h.withSessionRuntimeLock(id, func() {
 		if h.programItemManager != nil {
 			current, _, currentErr := h.programItemManager.CurrentAndNextSnapshots(id, time.Now().UTC())
@@ -777,6 +950,9 @@ func (h *Handler) endSession(c *gin.Context) {
 				return
 			}
 			if current != nil && (current.Status == programitem.StatusInProgress || current.Status == programitem.StatusPaused) {
+				capturedID := current.ID
+				cascadedProgramItemID = &capturedID
+				cascadedProgramItemTitle = current.Title
 				if _, endErr := h.programItemManager.End(current.ID); endErr != nil {
 					h.writeProgramItemErr(c, endErr)
 					return
@@ -802,6 +978,26 @@ func (h *Handler) endSession(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: id,
+		EventType: sessionlog.SessionEnded,
+		MessageInput: sessionlog.MessageInput{
+			SessionTitle: envelope.Session.Title,
+		},
+	})
+
+	if cascadedProgramItemID != nil {
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID:     id,
+			ProgramItemID: cascadedProgramItemID,
+			EventType:     sessionlog.CascadeProgramItemEndedBySession,
+			MessageInput: sessionlog.MessageInput{
+				ProgramItemTitle: cascadedProgramItemTitle,
+			},
+		})
+	}
+
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -869,6 +1065,30 @@ func (h *Handler) adjustTime(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: id,
+		EventType: sessionlog.SessionTimeAdjusted,
+		MessageInput: sessionlog.MessageInput{
+			DeltaSeconds: body.DeltaSeconds,
+		},
+		Metadata: map[string]any{"deltaSeconds": body.DeltaSeconds},
+	})
+
+	if envelope.ProgramItem != nil {
+		programItemID := envelope.ProgramItem.ID
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID:     id,
+			ProgramItemID: &programItemID,
+			EventType:     sessionlog.CascadeProgramItemTimeAdjustedBySession,
+			MessageInput: sessionlog.MessageInput{
+				ProgramItemTitle: envelope.ProgramItem.Title,
+				DeltaSeconds:     body.DeltaSeconds,
+			},
+			Metadata: map[string]any{"deltaSeconds": body.DeltaSeconds},
+		})
+	}
+
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -1045,6 +1265,23 @@ func (h *Handler) broadcastProgramItemEvent(sessionID string, event programitem.
 		return
 	}
 	h.hub.BroadcastWithRequestID(sessionID, event, RequestIDFromContext(c))
+}
+
+func (h *Handler) appendSessionLog(c *gin.Context, input sessionlog.AppendInput) {
+	if h.sessionLogManager == nil {
+		return
+	}
+
+	input.RequestID = RequestIDFromContext(c)
+	if _, err := h.sessionLogManager.Append(input); err != nil {
+		h.logger.Error(
+			"session_log_append_failed",
+			"session_id", input.SessionID,
+			"event_type", input.EventType.String(),
+			"request_id", input.RequestID,
+			"error", err,
+		)
+	}
 }
 
 func CORSMiddleware() gin.HandlerFunc {
