@@ -1,8 +1,6 @@
 "use client";
 
-"use client";
-
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,15 +13,62 @@ import {
   AnalyticsOverview,
 } from "@/lib/actions";
 import { formatClock } from "@/lib/session";
+import { cn } from "@/lib/utils";
 import {
-  Clock,
-  Users,
+  ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  PolarAngleAxis,
+  RadialBar,
+  RadialBarChart,
+  XAxis,
+} from "recharts";
+import {
   Calendar,
-  TrendingUp,
+  CircleHelp,
+  Clock,
   ExternalLink,
+  Gauge,
   Plus,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function formatMinutes(seconds: number): string {
+  return `${Math.round(seconds / 60)} min`;
+}
+
+function formatSignedSeconds(seconds: number): string {
+  const sign = seconds > 0 ? "+" : seconds < 0 ? "-" : "";
+  return `${sign}${formatClock(Math.abs(seconds), "00:00")}`;
+}
+
+function InfoHint({ text }: { text: string }) {
+  return (
+    <span
+      className="inline-flex cursor-help text-slate-400 transition-colors hover:text-slate-600"
+      title={text}
+      aria-label={text}
+    >
+      <CircleHelp className="h-3.5 w-3.5" />
+    </span>
+  );
+}
 
 export default function DashboardPage() {
   const [sessions, setSessions] = useState<SessionSnapshot[]>([]);
@@ -56,37 +101,180 @@ export default function DashboardPage() {
     loadSessions();
   }, []);
 
-  // Calculate stats from sessions
   const fallbackTotalSessions = sessions.length;
-  const fallbackActiveSessions = sessions.filter(
-    (s) => s.status === "LIVE" || s.status === "PAUSED",
+  const fallbackCreatedSessions = sessions.filter(
+    (s) => s.status === "CREATED",
+  ).length;
+  const fallbackLiveSessions = sessions.filter(
+    (s) => s.status === "LIVE",
+  ).length;
+  const fallbackPausedSessions = sessions.filter(
+    (s) => s.status === "PAUSED",
+  ).length;
+  const fallbackEndedSessions = sessions.filter(
+    (s) => s.status === "ENDED",
   ).length;
   const fallbackTodaySessions = sessions.filter((s) => {
     const createdAt = new Date(s.createdAt);
     const today = new Date();
     return createdAt.toDateString() === today.toDateString();
   }).length;
-  const fallbackAvgDuration =
-    sessions.length > 0
+  const fallbackTotalSessionDuration = sessions.reduce(
+    (acc, s) => acc + s.durationSeconds,
+    0,
+  );
+
+  const totalSessions = overview?.totalSessions ?? fallbackTotalSessions;
+  const createdSessions = overview?.createdSessions ?? fallbackCreatedSessions;
+  const liveSessions = overview?.liveSessions ?? fallbackLiveSessions;
+  const pausedSessions = overview?.pausedSessions ?? fallbackPausedSessions;
+  const endedSessions = overview?.endedSessions ?? fallbackEndedSessions;
+
+  const activeSessions = liveSessions + pausedSessions;
+  const avgDuration =
+    totalSessions > 0
       ? Math.round(
-          sessions.reduce((acc, s) => acc + s.durationSeconds, 0) /
-            sessions.length /
+          (overview?.totalSessionDurationSeconds ??
+            fallbackTotalSessionDuration) /
+            totalSessions /
             60,
         )
       : 0;
 
-  const totalSessions = overview?.totalSessions ?? fallbackTotalSessions;
-  const activeSessions =
-    overview?.liveSessions != null && overview?.pausedSessions != null
-      ? overview.liveSessions + overview.pausedSessions
-      : fallbackActiveSessions;
-  const todaySessions = fallbackTodaySessions;
-  const avgDuration =
-    overview?.totalSessions && overview.totalSessions > 0
-      ? Math.round(
-          overview.totalSessionDurationSeconds / overview.totalSessions / 60,
-        )
-      : fallbackAvgDuration;
+  const totalProgramItems = overview?.totalProgramItems ?? 0;
+  const endedProgramItems = overview?.endedProgramItems ?? 0;
+  const onTimeEndedProgramItems = overview?.onTimeEndedProgramItems ?? 0;
+  const overrunProgramItems = overview?.overrunProgramItems ?? 0;
+  const remainingProgramItems = Math.max(
+    totalProgramItems - endedProgramItems,
+    0,
+  );
+  const otherEndedProgramItems = Math.max(
+    endedProgramItems - onTimeEndedProgramItems - overrunProgramItems,
+    0,
+  );
+
+  const totalSessionDurationSeconds =
+    overview?.totalSessionDurationSeconds ?? fallbackTotalSessionDuration;
+  const totalPlannedSeconds =
+    overview?.totalPlannedSeconds ?? totalSessionDurationSeconds;
+  const effectiveBudgetSeconds =
+    overview?.effectiveBudgetSeconds ?? totalSessionDurationSeconds;
+  const totalAdjustmentSeconds = overview?.totalAdjustmentSeconds ?? 0;
+  const totalPauseSeconds = overview?.totalPauseSeconds ?? 0;
+  const totalPauseCount = overview?.totalPauseCount ?? 0;
+  const totalOverrunSeconds = overview?.totalOverrunSeconds ?? 0;
+  const totalUnderrunSeconds = overview?.totalUnderrunSeconds ?? 0;
+
+  const sessionCompletionPercent = clampPercent(
+    (overview?.sessionCompletionRatio ??
+      (totalSessions > 0 ? endedSessions / totalSessions : 0)) * 100,
+  );
+  const onTimePercent = clampPercent(
+    (overview?.programItemOnTimeRatio ??
+      (endedProgramItems > 0
+        ? onTimeEndedProgramItems / endedProgramItems
+        : 0)) * 100,
+  );
+
+  const sessionStatusData = useMemo(
+    () => [
+      { name: "Created", value: createdSessions, fill: "var(--color-created)" },
+      { name: "Live", value: liveSessions, fill: "var(--color-live)" },
+      { name: "Paused", value: pausedSessions, fill: "var(--color-paused)" },
+      { name: "Ended", value: endedSessions, fill: "var(--color-ended)" },
+    ],
+    [createdSessions, liveSessions, pausedSessions, endedSessions],
+  );
+
+  const programOutcomeData = useMemo(
+    () => [
+      {
+        name: "On Time",
+        value: onTimeEndedProgramItems,
+        fill: "var(--color-onTime)",
+      },
+      {
+        name: "Overrun",
+        value: overrunProgramItems,
+        fill: "var(--color-overrun)",
+      },
+      {
+        name: "Other Ended",
+        value: otherEndedProgramItems,
+        fill: "var(--color-otherEnded)",
+      },
+      {
+        name: "Remaining",
+        value: remainingProgramItems,
+        fill: "var(--color-remaining)",
+      },
+    ],
+    [
+      onTimeEndedProgramItems,
+      overrunProgramItems,
+      otherEndedProgramItems,
+      remainingProgramItems,
+    ],
+  );
+
+  const budgetData = useMemo(
+    () => [
+      { name: "Planned", value: Math.round(totalPlannedSeconds / 60) },
+      { name: "Effective", value: Math.round(effectiveBudgetSeconds / 60) },
+      { name: "Actual", value: Math.round(totalSessionDurationSeconds / 60) },
+    ],
+    [totalPlannedSeconds, effectiveBudgetSeconds, totalSessionDurationSeconds],
+  );
+
+  const timingImpactData = useMemo(
+    () => [
+      { name: "Adjustment", value: Math.round(totalAdjustmentSeconds / 60) },
+      { name: "Pause", value: Math.round(totalPauseSeconds / 60) },
+      { name: "Overrun", value: Math.round(totalOverrunSeconds / 60) },
+      { name: "Underrun", value: Math.round(totalUnderrunSeconds / 60) },
+    ],
+    [
+      totalAdjustmentSeconds,
+      totalPauseSeconds,
+      totalOverrunSeconds,
+      totalUnderrunSeconds,
+    ],
+  );
+
+  const sessionStatusChartConfig = {
+    value: { label: "Sessions" },
+    created: { label: "Created", color: "hsl(var(--chart-3))" },
+    live: { label: "Live", color: "hsl(var(--chart-2))" },
+    paused: { label: "Paused", color: "hsl(var(--chart-4))" },
+    ended: { label: "Ended", color: "hsl(var(--chart-1))" },
+  } satisfies ChartConfig;
+
+  const outcomesChartConfig = {
+    value: { label: "Program Items" },
+    onTime: { label: "On Time", color: "hsl(var(--chart-2))" },
+    overrun: { label: "Overrun", color: "hsl(var(--chart-1))" },
+    otherEnded: { label: "Other Ended", color: "hsl(var(--chart-4))" },
+    remaining: { label: "Remaining", color: "hsl(var(--muted-foreground))" },
+  } satisfies ChartConfig;
+
+  const budgetChartConfig = {
+    value: { label: "Minutes" },
+    budget: { label: "Minutes", color: "hsl(var(--chart-1))" },
+  } satisfies ChartConfig;
+
+  const impactsChartConfig = {
+    value: { label: "Minutes" },
+    impact: { label: "Minutes", color: "hsl(var(--chart-5))" },
+  } satisfies ChartConfig;
+
+  const completionGaugeConfig = {
+    completion: { label: "Completed", color: "hsl(var(--chart-2))" },
+  } satisfies ChartConfig;
+
+  const onTimeGaugeConfig = {
+    onTime: { label: "On Time", color: "hsl(var(--chart-1))" },
+  } satisfies ChartConfig;
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -103,9 +291,7 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-[1600px] mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
-      {/* Header Section */}
       <section className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-4">
-        {/* Global Time Health Card */}
         <Card className="md:col-span-3 lg:col-span-4 border-slate-200">
           <CardHeader className="pb-3">
             <div className="flex justify-between items-start">
@@ -144,7 +330,7 @@ export default function DashboardPage() {
                   <span className="text-3xl md:text-4xl font-bold text-blue-600">
                     {activeSessions}
                   </span>
-                  <span className="text-sm text-slate-500">LIVE</span>
+                  <span className="text-sm text-slate-500">live/paused</span>
                 </div>
               </div>
               <div className="space-y-1">
@@ -153,7 +339,7 @@ export default function DashboardPage() {
                 </span>
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl md:text-4xl font-bold text-slate-900">
-                    {todaySessions}
+                    {fallbackTodaySessions}
                   </span>
                   <span className="text-sm text-slate-500">today</span>
                 </div>
@@ -173,7 +359,6 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* Quick Action Card - Initialize Session */}
         <Card className="bg-slate-900 text-white border-slate-800 hover:scale-[1.02] transition-transform duration-300 cursor-pointer">
           <CardContent className="p-6 flex flex-col justify-between h-full">
             <div>
@@ -198,7 +383,244 @@ export default function DashboardPage() {
         </Card>
       </section>
 
-      {/* Sessions List */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <Card className="lg:col-span-3 border-slate-200">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              Session Completion
+              <InfoHint text="Ended sessions divided by total sessions in analytics overview." />
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <ChartContainer
+              config={completionGaugeConfig}
+              className="h-40 w-full"
+            >
+              <RadialBarChart
+                data={[{ name: "completion", value: sessionCompletionPercent }]}
+                startAngle={180}
+                endAngle={0}
+                innerRadius="68%"
+                outerRadius="100%"
+              >
+                <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
+                <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                <RadialBar dataKey="value" cornerRadius={10} background />
+              </RadialBarChart>
+            </ChartContainer>
+            <div className="text-center">
+              <p className="text-3xl font-bold text-slate-900">
+                {sessionCompletionPercent}%
+              </p>
+              <p className="text-xs text-slate-500">
+                {endedSessions} of {totalSessions} sessions ended
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-3 border-slate-200">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              On-Time Delivery
+              <InfoHint text="On-time ended program items divided by ended program items." />
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <ChartContainer config={onTimeGaugeConfig} className="h-40 w-full">
+              <RadialBarChart
+                data={[{ name: "onTime", value: onTimePercent }]}
+                startAngle={180}
+                endAngle={0}
+                innerRadius="68%"
+                outerRadius="100%"
+              >
+                <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
+                <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                <RadialBar dataKey="value" cornerRadius={10} background />
+              </RadialBarChart>
+            </ChartContainer>
+            <div className="text-center">
+              <p className="text-3xl font-bold text-slate-900">
+                {onTimePercent}%
+              </p>
+              <p className="text-xs text-slate-500">
+                {onTimeEndedProgramItems} on-time out of {endedProgramItems}{" "}
+                ended
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-6 border-slate-200">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              Session Status Mix
+              <InfoHint text="Created, live, paused, and ended sessions from overview." />
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ChartContainer
+              config={sessionStatusChartConfig}
+              className="h-52 w-full"
+            >
+              <BarChart
+                data={sessionStatusData}
+                margin={{ left: 10, right: 10 }}
+              >
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="name" tickLine={false} axisLine={false} />
+                <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                <Bar dataKey="value" radius={8}>
+                  {sessionStatusData.map((entry) => (
+                    <Cell key={entry.name} fill={entry.fill} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ChartContainer>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-6 border-slate-200">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              Program Item Outcomes
+              <InfoHint text="Breakdown of all program items: on-time, overrun, other ended, and remaining." />
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-4 items-center md:grid-cols-3">
+            <div className="md:col-span-2">
+              <ChartContainer
+                config={outcomesChartConfig}
+                className="h-56 w-full"
+              >
+                <PieChart>
+                  <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                  <Pie
+                    data={programOutcomeData}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={55}
+                    outerRadius={85}
+                    strokeWidth={4}
+                  >
+                    {programOutcomeData.map((entry) => (
+                      <Cell key={entry.name} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </ChartContainer>
+            </div>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between text-slate-700">
+                <span>Total Program Items</span>
+                <span className="font-semibold">{totalProgramItems}</span>
+              </div>
+              <div className="flex justify-between text-slate-700">
+                <span>Ended Items</span>
+                <span className="font-semibold">{endedProgramItems}</span>
+              </div>
+              <div className="flex justify-between text-slate-700">
+                <span>On-Time Ended</span>
+                <span className="font-semibold">{onTimeEndedProgramItems}</span>
+              </div>
+              <div className="flex justify-between text-slate-700">
+                <span>Overrun Items</span>
+                <span className="font-semibold">{overrunProgramItems}</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-6 border-slate-200">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              Budget vs Actual Time
+              <InfoHint text="Planned, effective budget, and total session duration across all sessions." />
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <ChartContainer config={budgetChartConfig} className="h-56 w-full">
+              <BarChart data={budgetData} margin={{ left: 10, right: 10 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="name" tickLine={false} axisLine={false} />
+                <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                <Bar dataKey="value" radius={8} fill="var(--color-budget)" />
+              </BarChart>
+            </ChartContainer>
+            <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-slate-500">Planned</p>
+                <p className="font-semibold text-slate-900">
+                  {formatMinutes(totalPlannedSeconds)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-slate-500">Effective Budget</p>
+                <p className="font-semibold text-slate-900">
+                  {formatMinutes(effectiveBudgetSeconds)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-slate-500">Actual Session Time</p>
+                <p className="font-semibold text-slate-900">
+                  {formatMinutes(totalSessionDurationSeconds)}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-6 border-slate-200">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              Timing Impact Drivers
+              <InfoHint text="Pause, adjustment, overrun, and underrun totals; hover chart bars for values." />
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <ChartContainer config={impactsChartConfig} className="h-56 w-full">
+              <BarChart
+                data={timingImpactData}
+                margin={{ left: 10, right: 10 }}
+              >
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="name" tickLine={false} axisLine={false} />
+                <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                <Bar dataKey="value" radius={8} fill="var(--color-impact)" />
+              </BarChart>
+            </ChartContainer>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-slate-500">Total Pause Duration</p>
+                <p className="font-semibold text-slate-900">
+                  {formatClock(totalPauseSeconds, "00:00")}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-slate-500">Pause Events</p>
+                <p className="font-semibold text-slate-900">
+                  {totalPauseCount}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-slate-500">Net Adjustment</p>
+                <p className="font-semibold text-slate-900">
+                  {formatSignedSeconds(totalAdjustmentSeconds)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-slate-500">Overrun / Underrun</p>
+                <p className="font-semibold text-slate-900">
+                  {formatClock(totalOverrunSeconds, "00:00")} /{" "}
+                  {formatClock(totalUnderrunSeconds, "00:00")}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </section>
+
       <section>
         <Card className="border-slate-200">
           <CardHeader className="border-b border-slate-200">
@@ -209,6 +631,13 @@ export default function DashboardPage() {
                 </CardTitle>
                 <p className="text-sm text-slate-600 mt-1">
                   Manage and monitor all synchronized sessions
+                </p>
+                <p className="text-xs text-slate-500 mt-2 flex items-center gap-1">
+                  <Gauge className="w-3.5 h-3.5" />
+                  Analytics computed at{" "}
+                  {overview?.computedAt
+                    ? new Date(overview.computedAt).toLocaleString()
+                    : "runtime"}
                 </p>
               </div>
               <SessionCreateModal onSuccess={loadSessions} />
