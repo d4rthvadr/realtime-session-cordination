@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -99,7 +100,7 @@ func (s *SqliteStore) Append(entry *Entry) (*Entry, error) {
 }
 
 func (s *SqliteStore) ListBySession(sessionID string, options ListOptions) ([]*Entry, error) {
-	rows, err := s.db.Query(`
+	query := `
 		SELECT
 			id,
 			session_id,
@@ -112,9 +113,28 @@ func (s *SqliteStore) ListBySession(sessionID string, options ListOptions) ([]*E
 			created_at
 		FROM session_logs
 		WHERE session_id = ?
-		ORDER BY occurred_at DESC, created_at DESC, id DESC
-		LIMIT ? OFFSET ?
-	`, sessionID, options.Limit, options.Offset)
+	`
+
+	args := []any{sessionID}
+
+	if options.EventType != "" {
+		query += " AND event_type = ?"
+		args = append(args, options.EventType.String())
+	}
+
+	switch options.EntityType {
+	case EntitySession:
+		query += " AND event_type LIKE 'SESSION_%'"
+	case EntityProgramItem:
+		query += " AND event_type LIKE 'PROGRAM_ITEM_%'"
+	case EntityCascade:
+		query += " AND event_type LIKE 'CASCADE_%'"
+	}
+
+	query += " ORDER BY occurred_at DESC, created_at DESC, id DESC LIMIT ? OFFSET ?"
+	args = append(args, options.Limit, options.Offset)
+
+	rows, err := s.db.Query(strings.TrimSpace(query), args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list session logs: %w", err)
 	}

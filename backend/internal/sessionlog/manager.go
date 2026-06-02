@@ -63,7 +63,11 @@ func (m *Manager) ListBySession(sessionID string, options ListOptions) ([]Snapsh
 		return nil, fmt.Errorf("session_id is required")
 	}
 
-	normalized := normalizeListOptions(options)
+	normalized, err := normalizeListOptions(options)
+	if err != nil {
+		return nil, err
+	}
+
 	entries, err := m.store.ListBySession(sessionID, normalized)
 	if err != nil {
 		return nil, err
@@ -77,7 +81,7 @@ func (m *Manager) ListBySession(sessionID string, options ListOptions) ([]Snapsh
 	return snaps, nil
 }
 
-func normalizeListOptions(options ListOptions) ListOptions {
+func normalizeListOptions(options ListOptions) (ListOptions, error) {
 	limit := options.Limit
 	if limit <= 0 {
 		limit = defaultListLimit
@@ -91,5 +95,20 @@ func normalizeListOptions(options ListOptions) ListOptions {
 		offset = 0
 	}
 
-	return ListOptions{Limit: limit, Offset: offset}
+	eventType := EventType(strings.TrimSpace(options.EventType.String()))
+	if eventType != "" && !IsKnownEventType(eventType) {
+		return ListOptions{}, fmt.Errorf("invalid event_type")
+	}
+
+	entityType := strings.TrimSpace(strings.ToLower(options.EntityType))
+	if entityType != "" && entityType != EntitySession && entityType != EntityProgramItem && entityType != EntityCascade {
+		return ListOptions{}, fmt.Errorf("invalid entity_type")
+	}
+
+	return ListOptions{
+		Limit:      limit,
+		Offset:     offset,
+		EventType:  eventType,
+		EntityType: entityType,
+	}, nil
 }

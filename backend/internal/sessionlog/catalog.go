@@ -6,6 +6,12 @@ import "fmt"
 type EventType string
 
 const (
+	EntitySession     = "session"
+	EntityProgramItem = "program_item"
+	EntityCascade     = "cascade"
+)
+
+const (
 	// Session events
 	SessionCreated      EventType = "SESSION_CREATED"
 	SessionStarted      EventType = "SESSION_STARTED"
@@ -42,6 +48,49 @@ type MessageInput struct {
 
 func (e EventType) String() string {
 	return string(e)
+}
+
+func IsKnownEventType(eventType EventType) bool {
+	_, ok := knownEventTypes[eventType]
+	return ok
+}
+
+// EventEntity maps an event type to a coarse filter bucket.
+func EventEntity(eventType EventType) string {
+	switch eventType {
+	case SessionCreated, SessionStarted, SessionPaused, SessionResumed, SessionEnded, SessionTimeAdjusted:
+		return EntitySession
+	case ProgramItemCreated, ProgramItemUpdated, ProgramItemsReordered, ProgramItemCanceled, ProgramItemStarted, ProgramItemPaused, ProgramItemResumed, ProgramItemEnded, ProgramItemTimeAdjusted:
+		return EntityProgramItem
+	case CascadeProgramItemPausedBySession, CascadeProgramItemResumedBySession, CascadeProgramItemEndedBySession, CascadeProgramItemTimeAdjustedBySession:
+		return EntityCascade
+	default:
+		return ""
+	}
+}
+
+var knownEventTypes = map[EventType]struct{}{
+	SessionCreated:      {},
+	SessionStarted:      {},
+	SessionPaused:       {},
+	SessionResumed:      {},
+	SessionEnded:        {},
+	SessionTimeAdjusted: {},
+
+	ProgramItemCreated:      {},
+	ProgramItemUpdated:      {},
+	ProgramItemsReordered:   {},
+	ProgramItemCanceled:     {},
+	ProgramItemStarted:      {},
+	ProgramItemPaused:       {},
+	ProgramItemResumed:      {},
+	ProgramItemEnded:        {},
+	ProgramItemTimeAdjusted: {},
+
+	CascadeProgramItemPausedBySession:       {},
+	CascadeProgramItemResumedBySession:      {},
+	CascadeProgramItemEndedBySession:        {},
+	CascadeProgramItemTimeAdjustedBySession: {},
 }
 
 // RenderMessage turns canonical events into stable, human-readable log text.

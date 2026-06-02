@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,11 @@ type runtimeEnvelope struct {
 	ProgramItem     *programitem.Snapshot `json:"programItem,omitempty"`
 	NextProgramItem *programitem.Snapshot `json:"nextProgramItem,omitempty"`
 	DeltaSeconds    int                   `json:"deltaSeconds,omitempty"`
+}
+
+type sessionLogSocketMessage struct {
+	Event      string              `json:"event"`
+	SessionLog sessionlog.Snapshot `json:"sessionLog"`
 }
 
 func NewHandler(
@@ -88,6 +94,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		protected.POST("/sessions", h.createSession)
 		protected.GET("/sessions", h.listSessions)
 		protected.GET("/sessions/:id/program-items", h.listProgramItems)
+		protected.GET("/sessions/:id/logs", h.listSessionLogs)
 		protected.POST("/sessions/:id/program-items", h.createProgramItem)
 		protected.POST("/sessions/:id/program-items/reorder", h.reorderProgramItems)
 		protected.POST("/sessions/:id/start", h.startSession)
@@ -194,6 +201,53 @@ func (h *Handler) listProgramItems(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"programItems": items})
+}
+
+func (h *Handler) listSessionLogs(c *gin.Context) {
+	if h.sessionLogManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "session log manager not configured"})
+		return
+	}
+
+	sessionID := c.Param("id")
+	if !h.manager.SessionExists(sessionID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": session.ErrNotFound.Error()})
+		return
+	}
+
+	options := sessionlog.ListOptions{
+		EventType:  sessionlog.EventType(strings.ToUpper(strings.TrimSpace(c.Query("eventType")))),
+		EntityType: strings.TrimSpace(c.Query("entityType")),
+	}
+
+	if limitRaw := strings.TrimSpace(c.Query("limit")); limitRaw != "" {
+		limit, err := strconv.Atoi(limitRaw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		options.Limit = limit
+	}
+
+	if offsetRaw := strings.TrimSpace(c.Query("offset")); offsetRaw != "" {
+		offset, err := strconv.Atoi(offsetRaw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+			return
+		}
+		options.Offset = offset
+	}
+
+	logs, err := h.sessionLogManager.ListBySession(sessionID, options)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"logs":  logs,
+		"count": len(logs),
+	})
 }
 
 func (h *Handler) getCurrentProgramItem(c *gin.Context) {
@@ -1273,7 +1327,8 @@ func (h *Handler) appendSessionLog(c *gin.Context, input sessionlog.AppendInput)
 	}
 
 	input.RequestID = RequestIDFromContext(c)
-	if _, err := h.sessionLogManager.Append(input); err != nil {
+	created, err := h.sessionLogManager.Append(input)
+	if err != nil {
 		h.logger.Error(
 			"session_log_append_failed",
 			"session_id", input.SessionID,
@@ -1281,6 +1336,14 @@ func (h *Handler) appendSessionLog(c *gin.Context, input sessionlog.AppendInput)
 			"request_id", input.RequestID,
 			"error", err,
 		)
+		return
+	}
+
+	if h.hub != nil && input.SessionID != "" {
+		h.hub.BroadcastWithRequestID(input.SessionID, sessionLogSocketMessage{
+			Event:      "session_log_appended",
+			SessionLog: created,
+		}, input.RequestID)
 	}
 }
 

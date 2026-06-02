@@ -37,6 +37,12 @@ func (ms *MemoryStore) ListBySession(sessionID string, options ListOptions) ([]*
 
 	ordered := make([]*Entry, 0, len(all))
 	for _, entry := range all {
+		if options.EventType != "" && entry.EventType != options.EventType {
+			continue
+		}
+		if options.EntityType != "" && EventEntity(entry.EventType) != options.EntityType {
+			continue
+		}
 		ordered = append(ordered, cloneEntry(entry))
 	}
 

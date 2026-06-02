@@ -114,6 +114,7 @@ See detailed formulas in docs/programitem-time-calculation.md.
 
 - GET /api/v1/sessions/:id returns unified runtime envelope.
 - GET /api/v1/sessions/:id/current-program-item returns current and next ProgramItem snapshots.
+- GET /api/v1/sessions/:id/logs returns paginated session log entries (auth required).
 - POST /api/v1/sessions/:id/start returns unified runtime envelope.
 - POST /api/v1/sessions/:id/pause returns unified runtime envelope.
 - POST /api/v1/sessions/:id/resume returns unified runtime envelope.
@@ -128,6 +129,27 @@ See detailed formulas in docs/programitem-time-calculation.md.
 ### WebSocket Snapshot
 
 The websocket connect snapshot and runtime updates now use the same unified runtime envelope shape.
+
+Session log appends are also broadcast on the same session channel as lightweight payloads:
+
+```json
+{
+  "event": "session_log_appended",
+  "sessionLog": {
+    "id": "log_abc123",
+    "sessionId": "sess_abc123",
+    "programItemId": "pi_abc123",
+    "eventType": "PROGRAM_ITEM_PAUSED",
+    "message": "Paused program item \"Panel\"",
+    "metadata": { "deltaSeconds": 60 },
+    "occurredAt": "2026-06-02T10:20:00Z",
+    "requestId": "req_123",
+    "createdAt": "2026-06-02T10:20:00Z"
+  }
+}
+```
+
+These payloads intentionally do not include runtime `session/programItem` fields.
 
 ### Session Log Taxonomy (Phase 1A)
 
@@ -331,6 +353,45 @@ Retrieve current runtime envelope. No authentication required (read-only).
 
 ```json
 { "error": "session not found" }
+```
+
+---
+
+### List Session Logs
+
+```
+GET /api/v1/sessions/:id/logs
+Authorization: Bearer <token>
+```
+
+Returns append-only session log entries ordered by newest first.
+
+Optional query params:
+
+- `limit` (int, default 50, max 200)
+- `offset` (int, default 0)
+- `eventType` (exact canonical event type, e.g. `SESSION_PAUSED`)
+- `entityType` (`session` | `program_item` | `cascade`)
+
+**Response (200):**
+
+```json
+{
+  "logs": [
+    {
+      "id": "log_abc123",
+      "sessionId": "sess_abc123",
+      "programItemId": "pi_abc123",
+      "eventType": "PROGRAM_ITEM_PAUSED",
+      "message": "Paused program item \"Panel\"",
+      "metadata": {},
+      "occurredAt": "2026-06-02T10:20:00Z",
+      "requestId": "req_123",
+      "createdAt": "2026-06-02T10:20:00Z"
+    }
+  ],
+  "count": 1
+}
 ```
 
 ---

@@ -47,8 +47,10 @@ type AppendInput struct {
 
 // ListOptions controls session-scoped timeline retrieval.
 type ListOptions struct {
-	Limit  int
-	Offset int
+	Limit      int
+	Offset     int
+	EventType  EventType
+	EntityType string
 }
 
 func (e *Entry) Snapshot() Snapshot {
