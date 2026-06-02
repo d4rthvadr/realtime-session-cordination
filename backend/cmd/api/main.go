@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 
+	"realtime-session-coordination/backend/internal/analytics"
 	"realtime-session-coordination/backend/internal/api"
 	"realtime-session-coordination/backend/internal/auth"
 	"realtime-session-coordination/backend/internal/config"
@@ -85,8 +86,9 @@ func main() {
 	manager := session.NewManager(store)
 	programItemManager := programitem.NewManager(programItemStore)
 	sessionLogManager := sessionlog.NewManager(sessionLogStore)
+	analyticsManager := analytics.NewManager()
 	hub := ws.NewHub(logger)
-	handler := api.NewHandler(manager, programItemManager, sessionLogManager, hub, authService, logger)
+	handler := api.NewHandler(manager, programItemManager, sessionLogManager, analyticsManager, hub, authService, logger)
 
 	router := gin.New()
 	router.Use(gin.Recovery(), api.CORSMiddleware(), api.RequestLoggingMiddleware(logger))

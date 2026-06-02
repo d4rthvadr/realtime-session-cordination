@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"realtime-session-coordination/backend/internal/analytics"
 	"realtime-session-coordination/backend/internal/auth"
 	"realtime-session-coordination/backend/internal/logging"
 	"realtime-session-coordination/backend/internal/programitem"
@@ -26,6 +27,7 @@ type Handler struct {
 	manager            *session.Manager
 	programItemManager *programitem.Manager
 	sessionLogManager  *sessionlog.Manager
+	analyticsManager   *analytics.Manager
 	hub                *ws.Hub
 	authService        *auth.Service
 	logger             *slog.Logger
@@ -56,6 +58,7 @@ func NewHandler(
 	manager *session.Manager,
 	programItemManager *programitem.Manager,
 	sessionLogManager *sessionlog.Manager,
+	analyticsManager *analytics.Manager,
 	hub *ws.Hub,
 	authService *auth.Service,
 	logger *slog.Logger,
@@ -69,6 +72,7 @@ func NewHandler(
 		manager:            manager,
 		programItemManager: programItemManager,
 		sessionLogManager:  sessionLogManager,
+		analyticsManager:   analyticsManager,
 		hub:                hub,
 		authService:        authService,
 		logger:             logger,
@@ -95,6 +99,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		protected.GET("/sessions", h.listSessions)
 		protected.GET("/sessions/:id/program-items", h.listProgramItems)
 		protected.GET("/sessions/:id/logs", h.listSessionLogs)
+		protected.GET("/sessions/:id/analytics", h.getSessionAnalytics)
 		protected.POST("/sessions/:id/program-items", h.createProgramItem)
 		protected.POST("/sessions/:id/program-items/reorder", h.reorderProgramItems)
 		protected.POST("/sessions/:id/start", h.startSession)
@@ -248,6 +253,34 @@ func (h *Handler) listSessionLogs(c *gin.Context) {
 		"logs":  logs,
 		"count": len(logs),
 	})
+}
+
+func (h *Handler) getSessionAnalytics(c *gin.Context) {
+	if h.analyticsManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
+		return
+	}
+
+	if h.programItemManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+		return
+	}
+
+	sessionID := c.Param("id")
+	sessionSnap, err := h.manager.GetSnapshot(sessionID)
+	if err != nil {
+		h.writeDomainErr(c, err)
+		return
+	}
+
+	items, err := h.programItemManager.ListSnapshots(sessionID)
+	if err != nil {
+		h.writeProgramItemErr(c, err)
+		return
+	}
+
+	summary := h.analyticsManager.BuildSessionSummary(sessionSnap, items, time.Now().UTC())
+	c.JSON(http.StatusOK, gin.H{"analytics": summary})
 }
 
 func (h *Handler) getCurrentProgramItem(c *gin.Context) {
