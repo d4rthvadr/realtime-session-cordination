@@ -619,25 +619,16 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
-      </section>
 
-      <section>
-        <Card className="border-slate-200">
-          <CardHeader className="border-b border-slate-200">
-            <div className="flex justify-between items-center">
+        <Card className="lg:col-span-6 border-slate-200">
+          <CardHeader className="border-b border-slate-200 pb-3">
+            <div className="flex items-center justify-between gap-3">
               <div>
-                <CardTitle className="text-xl font-semibold">
+                <CardTitle className="text-base font-semibold">
                   Session Coordination Log
                 </CardTitle>
-                <p className="text-sm text-slate-600 mt-1">
-                  Manage and monitor all synchronized sessions
-                </p>
-                <p className="text-xs text-slate-500 mt-2 flex items-center gap-1">
-                  <Gauge className="w-3.5 h-3.5" />
-                  Analytics computed at{" "}
-                  {overview?.computedAt
-                    ? new Date(overview.computedAt).toLocaleString()
-                    : "runtime"}
+                <p className="text-xs text-slate-500 mt-1">
+                  Showing latest 5 sessions for quick monitoring
                 </p>
               </div>
               <SessionCreateModal onSuccess={loadSessions} />
@@ -645,95 +636,74 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent className="p-0">
             {isPending && sessions.length === 0 ? (
-              <div className="text-center py-12 text-slate-500">
-                <Clock className="w-12 h-12 mx-auto mb-4 animate-spin text-slate-300" />
-                <p>Loading sessions...</p>
+              <div className="text-center py-10 text-slate-500">
+                <Clock className="w-8 h-8 mx-auto mb-3 animate-spin text-slate-300" />
+                <p className="text-sm">Loading sessions...</p>
               </div>
             ) : error ? (
-              <div className="text-center py-12 text-red-600">
-                <p>Error loading sessions: {error}</p>
+              <div className="text-center py-10 text-red-600">
+                <p className="text-sm">Error loading sessions: {error}</p>
               </div>
             ) : sessions.length === 0 ? (
-              <div className="text-center py-12 text-slate-500">
-                <Calendar className="w-12 h-12 mx-auto mb-4 text-slate-300" />
-                <p className="mb-4">No sessions created yet</p>
-                <SessionCreateModal
-                  onSuccess={loadSessions}
-                  trigger={
-                    <Button variant="outline" className="rounded-full">
-                      <Plus className="w-4 h-4 mr-2" />
-                      Create Your First Session
-                    </Button>
-                  }
-                />
+              <div className="text-center py-10 text-slate-500">
+                <Calendar className="w-8 h-8 mx-auto mb-3 text-slate-300" />
+                <p className="text-sm">No sessions created yet</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="p-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                      <th className="p-3 text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
                         Session
                       </th>
-                      <th className="p-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                        Speaker
-                      </th>
-                      <th className="p-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                      <th className="p-3 text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
                         Status
                       </th>
-                      <th className="p-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                      <th className="p-3 text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
                         Duration
                       </th>
-                      <th className="p-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                        Remaining
-                      </th>
-                      <th className="p-4 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                        Actions
+                      <th className="p-3 text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+                        Action
                       </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {sessions.map((session) => (
+                    {sessions.slice(0, 5).map((session) => (
                       <tr
                         key={session.id}
                         className="hover:bg-slate-50 transition-colors"
                       >
-                        <td className="p-4">
-                          <div className="font-medium text-slate-900">
+                        <td className="p-3">
+                          <div className="font-medium text-slate-900 text-sm leading-tight">
                             {session.title}
                           </div>
-                          <div className="text-xs text-slate-500 font-mono mt-0.5">
-                            #{session.id.slice(0, 8)}
+                          <div className="text-[11px] text-slate-500 mt-1">
+                            {session.speakerName} • #{session.id.slice(0, 8)}
                           </div>
                         </td>
-                        <td className="p-4 text-sm text-slate-700">
-                          {session.speakerName}
-                        </td>
-                        <td className="p-4">
+                        <td className="p-3">
                           <Badge
                             className={cn(
-                              "text-xs font-semibold border",
+                              "text-[10px] font-semibold border",
                               getStatusColor(session.status),
                             )}
                           >
                             {session.status}
                           </Badge>
                         </td>
-                        <td className="p-4 text-sm text-slate-700 font-mono">
+                        <td className="p-3 text-sm text-slate-700 font-mono whitespace-nowrap">
                           {formatClock(session.durationSeconds, "00:00")}
                         </td>
-                        <td className="p-4 text-sm text-slate-700 font-mono">
-                          {formatClock(session.durationSeconds, "00:00")}
-                        </td>
-                        <td className="p-4">
+                        <td className="p-3">
                           <Link href={`/dashboard/sessions/${session.id}`}>
                             <Button
                               variant="outline"
                               size="sm"
-                              className="rounded-full"
+                              className="h-8 rounded-full px-3"
                             >
-                              View Details
-                              <ExternalLink className="w-3 h-3 ml-2" />
+                              View
+                              <ExternalLink className="w-3 h-3 ml-1.5" />
                             </Button>
                           </Link>
                         </td>
