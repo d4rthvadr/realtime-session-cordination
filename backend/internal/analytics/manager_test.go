@@ -183,3 +183,85 @@ func TestBuildPlatformOverviewAggregatesSessions(t *testing.T) {
 		t.Fatalf("expected ComputedAt to equal now")
 	}
 }
+
+func TestBuildSessionSummaryZeroEndedRatioGuard(t *testing.T) {
+	now := time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC)
+	mgr := NewManager()
+
+	summary := mgr.BuildSessionSummary(
+		session.Snapshot{ID: "sess_zero", Status: session.StatusLive, DurationSeconds: 1800},
+		[]programitem.Snapshot{{Status: programitem.StatusScheduled, RuntimeDurationSeconds: 300}},
+		now,
+	)
+
+	if summary.EndedCount != 0 {
+		t.Fatalf("expected EndedCount=0, got %d", summary.EndedCount)
+	}
+	if summary.EndedOnTimeRatio != 0 {
+		t.Fatalf("expected EndedOnTimeRatio=0, got %f", summary.EndedOnTimeRatio)
+	}
+}
+
+func TestBuildSessionSummaryEndedWithoutRemainingIsCountedButNotClassified(t *testing.T) {
+	now := time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC)
+	mgr := NewManager()
+
+	summary := mgr.BuildSessionSummary(
+		session.Snapshot{ID: "sess_nil", Status: session.StatusEnded, DurationSeconds: 1800},
+		[]programitem.Snapshot{{Status: programitem.StatusEnded, RuntimeDurationSeconds: 300}},
+		now,
+	)
+
+	if summary.EndedCount != 1 {
+		t.Fatalf("expected EndedCount=1, got %d", summary.EndedCount)
+	}
+	if summary.EndedOnTimeCount != 0 {
+		t.Fatalf("expected EndedOnTimeCount=0, got %d", summary.EndedOnTimeCount)
+	}
+	if summary.OverrunItemCount != 0 {
+		t.Fatalf("expected OverrunItemCount=0, got %d", summary.OverrunItemCount)
+	}
+	if summary.EndedOnTimeRatio != 0 {
+		t.Fatalf("expected EndedOnTimeRatio=0, got %f", summary.EndedOnTimeRatio)
+	}
+}
+
+func TestBuildSessionSummaryPlannedSecondsFallbackOrder(t *testing.T) {
+	now := time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC)
+	mgr := NewManager()
+
+	scheduledStart := time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC)
+	scheduledEnd := scheduledStart.Add(7 * time.Minute)
+
+	summary := mgr.BuildSessionSummary(
+		session.Snapshot{ID: "sess_planned", Status: session.StatusCreated, DurationSeconds: 1200},
+		[]programitem.Snapshot{
+			{Status: programitem.StatusScheduled, RuntimeDurationSeconds: 120},
+			{Status: programitem.StatusScheduled, RuntimeDurationSeconds: 0, ExpectedDurationMinutes: 5},
+			{Status: programitem.StatusScheduled, RuntimeDurationSeconds: 0, ExpectedDurationMinutes: 0, ScheduledStart: scheduledStart, ScheduledEnd: scheduledEnd},
+		},
+		now,
+	)
+
+	// 120 + 300 + 420
+	if summary.PlannedSeconds != 840 {
+		t.Fatalf("expected PlannedSeconds=840, got %d", summary.PlannedSeconds)
+	}
+}
+
+func TestBuildPlatformOverviewZeroDenominatorRatioGuards(t *testing.T) {
+	now := time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC)
+	mgr := NewManager()
+
+	overview := mgr.BuildPlatformOverview(nil, nil, now)
+
+	if overview.TotalSessions != 0 {
+		t.Fatalf("expected TotalSessions=0, got %d", overview.TotalSessions)
+	}
+	if overview.SessionCompletionRatio != 0 {
+		t.Fatalf("expected SessionCompletionRatio=0, got %f", overview.SessionCompletionRatio)
+	}
+	if overview.ProgramItemOnTimeRatio != 0 {
+		t.Fatalf("expected ProgramItemOnTimeRatio=0, got %f", overview.ProgramItemOnTimeRatio)
+	}
+}
