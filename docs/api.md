@@ -155,6 +155,27 @@ These payloads intentionally do not include runtime `session/programItem` fields
 
 ### Analytics Summary Endpoints (Phase 2)
 
+Analytics raw event pipeline contract (Phase 2A):
+
+- `analytics_events` fields:
+  - `id` (string, primary key)
+  - `session_id` (string, required)
+  - `program_item_id` (string, optional)
+  - `event_key` (string, required)
+  - `occurred_at` (RFC3339 timestamp, required)
+  - `ingested_at` (RFC3339 timestamp, required)
+  - `source` (enum: `server`, `client`, required)
+  - `payload_json` (JSON string payload, required)
+- `analytics_outbox` states:
+  - `pending`
+  - `processing`
+  - `processed`
+  - `dead_letter`
+- `analytics_checkpoints` fields:
+  - `worker_name` (string, primary key)
+  - `last_event_id` (string, required)
+  - `updated_at` (RFC3339 timestamp, required)
+
 Per-session analytics:
 
 `GET /api/v1/sessions/:id/analytics`

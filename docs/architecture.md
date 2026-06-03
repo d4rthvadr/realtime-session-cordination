@@ -22,6 +22,11 @@ Current state:
 - Adjust-time mutation coupling no longer writes to both Session and active ProgramItem.
 - Session adjust-time now prioritizes active ProgramItem runtime when present, with Session-only fallback when no active runtime item exists.
 
+## Analytics Pipeline Tracking
+
+Sequential execution status for analytics phases is tracked in docs/analytics-pipeline-phases.md.
+This file is updated from earliest incomplete phase onward to keep implementation order explicit.
+
 ## System Overview
 
 The Realtime Session Coordination Platform is a three-tier system:
