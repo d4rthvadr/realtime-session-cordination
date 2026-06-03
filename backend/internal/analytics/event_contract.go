@@ -47,6 +47,11 @@ type EventStore interface {
 	AppendEvent(record EventRecord) error
 }
 
+// IngestionStore persists raw analytics events and outbox records atomically.
+type IngestionStore interface {
+	AppendEventAndEnqueue(record EventRecord, now time.Time) error
+}
+
 // OutboxStore persists outbox records consumed by the analytics processor.
 type OutboxStore interface {
 	Enqueue(eventID string, now time.Time) error

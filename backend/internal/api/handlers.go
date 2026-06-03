@@ -28,6 +28,7 @@ type Handler struct {
 	programItemManager *programitem.Manager
 	sessionLogManager  *sessionlog.Manager
 	analyticsManager   *analytics.Manager
+	analyticsEmitter   *analytics.Emitter
 	hub                *ws.Hub
 	authService        *auth.Service
 	logger             *slog.Logger
@@ -59,6 +60,7 @@ func NewHandler(
 	programItemManager *programitem.Manager,
 	sessionLogManager *sessionlog.Manager,
 	analyticsManager *analytics.Manager,
+	analyticsEmitter *analytics.Emitter,
 	hub *ws.Hub,
 	authService *auth.Service,
 	logger *slog.Logger,
@@ -73,6 +75,7 @@ func NewHandler(
 		programItemManager: programItemManager,
 		sessionLogManager:  sessionLogManager,
 		analyticsManager:   analyticsManager,
+		analyticsEmitter:   analyticsEmitter,
 		hub:                hub,
 		authService:        authService,
 		logger:             logger,
@@ -564,6 +567,13 @@ func (h *Handler) startProgramItem(c *gin.Context) {
 		},
 	})
 
+	// Emit analytics event for program item start
+	if err := h.analyticsEmitter.EmitProgramItemEvent(item.SessionID, itemID, "PROGRAM_ITEM_STARTED", map[string]any{
+		"title": item.Title,
+	}); err != nil {
+		h.logger.Error("emit_program_item_start_event", "error", err)
+	}
+
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
@@ -616,6 +626,13 @@ func (h *Handler) endProgramItem(c *gin.Context) {
 			ProgramItemTitle: item.Title,
 		},
 	})
+
+	// Emit analytics event for program item end
+	if err := h.analyticsEmitter.EmitProgramItemEvent(item.SessionID, itemID, "PROGRAM_ITEM_ENDED", map[string]any{
+		"title": item.Title,
+	}); err != nil {
+		h.logger.Error("emit_program_item_end_event", "error", err)
+	}
 
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
@@ -693,6 +710,13 @@ func (h *Handler) pauseProgramItem(c *gin.Context) {
 		})
 	}
 
+	// Emit analytics event for program item pause
+	if err := h.analyticsEmitter.EmitProgramItemEvent(item.SessionID, itemID, "PROGRAM_ITEM_PAUSED", map[string]any{
+		"title": item.Title,
+	}); err != nil {
+		h.logger.Error("emit_program_item_pause_event", "error", err)
+	}
+
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
@@ -767,6 +791,13 @@ func (h *Handler) resumeProgramItem(c *gin.Context) {
 			},
 			Metadata: map[string]any{"source": "program_item_resume"},
 		})
+	}
+
+	// Emit analytics event for program item resume
+	if err := h.analyticsEmitter.EmitProgramItemEvent(item.SessionID, itemID, "PROGRAM_ITEM_RESUMED", map[string]any{
+		"title": item.Title,
+	}); err != nil {
+		h.logger.Error("emit_program_item_resume_event", "error", err)
 	}
 
 	c.JSON(http.StatusOK, event)
@@ -915,6 +946,14 @@ func (h *Handler) startSession(c *gin.Context) {
 			SessionTitle: envelope.Session.Title,
 		},
 	})
+
+	// Emit analytics event for session start
+	if err := h.analyticsEmitter.EmitSessionEvent(id, "SESSION_STARTED", map[string]any{
+		"title":     envelope.Session.Title,
+		"startedAt": envelope.Session.CreatedAt,
+	}); err != nil {
+		h.logger.Error("emit_session_start_event", "error", err)
+	}
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -981,6 +1020,13 @@ func (h *Handler) pauseSession(c *gin.Context) {
 		})
 	}
 
+	// Emit analytics event for session pause
+	if err := h.analyticsEmitter.EmitSessionEvent(id, "SESSION_PAUSED", map[string]any{
+		"title": envelope.Session.Title,
+	}); err != nil {
+		h.logger.Error("emit_session_pause_event", "error", err)
+	}
+
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -1045,6 +1091,13 @@ func (h *Handler) resumeSession(c *gin.Context) {
 				ProgramItemTitle: envelope.ProgramItem.Title,
 			},
 		})
+	}
+
+	// Emit analytics event for session resume
+	if err := h.analyticsEmitter.EmitSessionEvent(id, "SESSION_RESUMED", map[string]any{
+		"title": envelope.Session.Title,
+	}); err != nil {
+		h.logger.Error("emit_session_resume_event", "error", err)
 	}
 
 	c.JSON(http.StatusOK, envelope)
@@ -1115,6 +1168,13 @@ func (h *Handler) endSession(c *gin.Context) {
 				ProgramItemTitle: cascadedProgramItemTitle,
 			},
 		})
+	}
+
+	// Emit analytics event for session end
+	if err := h.analyticsEmitter.EmitSessionEvent(id, "SESSION_ENDED", map[string]any{
+		"title": envelope.Session.Title,
+	}); err != nil {
+		h.logger.Error("emit_session_end_event", "error", err)
 	}
 
 	c.JSON(http.StatusOK, envelope)

@@ -21,6 +21,10 @@ type SqliteStore struct {
 	db *sql.DB
 }
 
+type dbExec interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 func NewSqliteStore(dbPath string) (*SqliteStore, error) {
 	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on", dbPath)
 	db, err := sql.Open("sqlite3", dsn)
@@ -96,6 +100,33 @@ func (s *SqliteStore) runMigrations() error {
 }
 
 func (s *SqliteStore) AppendEvent(record EventRecord) error {
+	return s.appendEvent(s.db, record)
+}
+
+func (s *SqliteStore) AppendEventAndEnqueue(record EventRecord, now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin analytics ingestion transaction: %w", err)
+	}
+
+	if err = s.appendEvent(tx, record); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	if err = s.enqueue(tx, record.ID, now); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit analytics ingestion transaction: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SqliteStore) appendEvent(exec dbExec, record EventRecord) error {
 	if record.ID == "" {
 		return fmt.Errorf("event id is required")
 	}
@@ -121,7 +152,7 @@ func (s *SqliteStore) AppendEvent(record EventRecord) error {
 		ingestedAt = time.Now().UTC()
 	}
 
-	_, err := s.db.Exec(`
+	_, err := exec.Exec(`
 		INSERT INTO analytics_events (
 			id,
 			session_id,
@@ -153,6 +184,10 @@ func (s *SqliteStore) AppendEvent(record EventRecord) error {
 }
 
 func (s *SqliteStore) Enqueue(eventID string, now time.Time) error {
+	return s.enqueue(s.db, eventID, now)
+}
+
+func (s *SqliteStore) enqueue(exec dbExec, eventID string, now time.Time) error {
 	if eventID == "" {
 		return fmt.Errorf("event id is required")
 	}
@@ -161,7 +196,7 @@ func (s *SqliteStore) Enqueue(eventID string, now time.Time) error {
 	}
 	timestamp := now.UTC().Format(time.RFC3339Nano)
 
-	_, err := s.db.Exec(`
+	_, err := exec.Exec(`
 		INSERT INTO analytics_outbox (
 			event_id,
 			state,

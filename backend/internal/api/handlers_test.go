@@ -16,22 +16,38 @@ import (
   "github.com/gin-gonic/gin"
 )
 
-func newTestHandler(t *testing.T) (*Handler, *session.Manager, *programitem.Manager, *sessionlog.Manager) {
-  t.Helper()
+type testIngestionStore struct {
+  events   []analytics.EventRecord
+  enqueued []string
+}
 
-  sessionMgr := session.NewManager(session.NewMemoryStore())
-  programItemMgr := programitem.NewManager(programitem.NewMemoryStore(sessionMgr.SessionExists))
-  sessionLogMgr := sessionlog.NewManager(sessionlog.NewMemoryStore())
-  analyticsMgr := analytics.NewManager()
-  hub := ws.NewHub(nil)
+func (s *testIngestionStore) AppendEventAndEnqueue(record analytics.EventRecord, now time.Time) error {
+  s.events = append(s.events, record)
+  s.enqueued = append(s.enqueued, record.ID)
+  return nil
+}
 
-  return NewHandler(sessionMgr, programItemMgr, sessionLogMgr, analyticsMgr, hub, nil, nil), sessionMgr, programItemMgr, sessionLogMgr
+func newTestHandler(t *testing.T) (*Handler, *session.Manager, *programitem.Manager, *sessionlog.Manager, *analytics.Emitter) {
+	t.Helper()
+
+	sessionMgr := session.NewManager(session.NewMemoryStore())
+	programItemMgr := programitem.NewManager(programitem.NewMemoryStore(sessionMgr.SessionExists))
+	sessionLogMgr := sessionlog.NewManager(sessionlog.NewMemoryStore())
+	analyticsMgr := analytics.NewManager()
+
+	// Create in-memory stores for testing
+  ingestionStore := &testIngestionStore{events: []analytics.EventRecord{}, enqueued: []string{}}
+  analyticsEmitter := analytics.NewEmitter(ingestionStore)
+
+	hub := ws.NewHub(nil)
+
+	return NewHandler(sessionMgr, programItemMgr, sessionLogMgr, analyticsMgr, analyticsEmitter, hub, nil, nil), sessionMgr, programItemMgr, sessionLogMgr, analyticsEmitter
 }
 
 func TestListSessionLogsReturnsLogsAndCount(t *testing.T) {
   gin.SetMode(gin.TestMode)
 
-  handler, sessionMgr, _, sessionLogMgr := newTestHandler(t)
+  handler, sessionMgr, _, sessionLogMgr, _ := newTestHandler(t)
 
   created, _, err := sessionMgr.Create(session.CreateInput{
     Title:           "Demo Session",
@@ -92,7 +108,7 @@ func TestListSessionLogsReturnsLogsAndCount(t *testing.T) {
 func TestListSessionLogsRejectsInvalidLimit(t *testing.T) {
   gin.SetMode(gin.TestMode)
 
-  handler, sessionMgr, _, _ := newTestHandler(t)
+  handler, sessionMgr, _, _, _ := newTestHandler(t)
 
   created, _, err := sessionMgr.Create(session.CreateInput{
     Title:           "Demo Session",
@@ -118,7 +134,7 @@ func TestListSessionLogsRejectsInvalidLimit(t *testing.T) {
 func TestGetAnalyticsOverviewReturnsAggregates(t *testing.T) {
   gin.SetMode(gin.TestMode)
 
-  handler, sessionMgr, programItemMgr, _ := newTestHandler(t)
+  handler, sessionMgr, programItemMgr, _, _ := newTestHandler(t)
 
   created, _, err := sessionMgr.Create(session.CreateInput{
     Title:           "Analytics Session",
@@ -168,3 +184,39 @@ func TestGetAnalyticsOverviewReturnsAggregates(t *testing.T) {
     t.Fatalf("expected totalProgramItems=1, got %d", payload.Overview.TotalProgramItems)
   }
 }
+
+func TestStartSessionEmitsAnalyticsEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	_, sessionMgr, _, _, _ := newTestHandler(t)
+
+	created, _, err := sessionMgr.Create(session.CreateInput{
+		Title:           "Demo Session",
+		SpeakerName:     "Host",
+		DurationSeconds: 1800,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Start the session via manager instead of handler to avoid auth checks
+	startedEvent, err := sessionMgr.Start(created.ID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+
+	if startedEvent.Type != "SESSION_STARTED" {
+		t.Fatalf("expected event type SESSION_STARTED, got %s", startedEvent.Type)
+	}
+
+	// Verify session state changed
+	snap, err := sessionMgr.GetSnapshot(created.ID)
+	if err != nil {
+		t.Fatalf("get session snapshot: %v", err)
+	}
+
+	if snap.Status != session.StatusLive {
+		t.Fatalf("expected session status LIVE, got %s", snap.Status)
+	}
+}
+
