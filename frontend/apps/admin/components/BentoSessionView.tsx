@@ -27,6 +27,12 @@ import {
   AnalyticsFreshness,
   AnalyticsDataSource,
 } from "@/lib/actions";
+import {
+  deriveAnalyticsHealth,
+  analyticsHealthBadgeClasses,
+  analyticsHealthLabel,
+  analyticsSourceLabel,
+} from "@/lib/analytics-health";
 import { formatClock } from "@/lib/session";
 import { buildAdminWsUrl, getViewerUrl } from "@/lib/backend";
 import Link from "next/link";
@@ -69,84 +75,6 @@ import { cn } from "@/lib/utils";
 
 interface BentoSessionViewProps {
   sessionId: string;
-}
-
-type AnalyticsHealth =
-  | "healthy"
-  | "lagging"
-  | "stale"
-  | "unavailable"
-  | "error";
-
-function deriveAnalyticsHealth(
-  freshness: AnalyticsFreshness | null,
-  source: AnalyticsDataSource | null,
-): AnalyticsHealth {
-  if (source === "error") {
-    return "error";
-  }
-  if (!freshness) {
-    return "unavailable";
-  }
-  if (freshness.pendingCount > 0) {
-    return "lagging";
-  }
-  if (freshness.lastProcessedAt) {
-    const lastProcessed = Date.parse(freshness.lastProcessedAt);
-    if (Number.isFinite(lastProcessed)) {
-      const ageSeconds = Math.max(0, (Date.now() - lastProcessed) / 1000);
-      if (ageSeconds > 120) {
-        return "stale";
-      }
-    }
-  }
-  return "healthy";
-}
-
-function analyticsHealthBadgeClasses(health: AnalyticsHealth): string {
-  switch (health) {
-    case "healthy":
-      return "bg-emerald-50 text-emerald-700 border-emerald-200";
-    case "lagging":
-      return "bg-amber-50 text-amber-700 border-amber-200";
-    case "stale":
-      return "bg-orange-50 text-orange-700 border-orange-200";
-    case "error":
-      return "bg-red-50 text-red-700 border-red-200";
-    default:
-      return "bg-slate-100 text-slate-700 border-slate-200";
-  }
-}
-
-function analyticsHealthLabel(health: AnalyticsHealth): string {
-  switch (health) {
-    case "healthy":
-      return "HEALTHY";
-    case "lagging":
-      return "LAGGING";
-    case "stale":
-      return "STALE";
-    case "error":
-      return "ERROR";
-    default:
-      return "UNAVAILABLE";
-  }
-}
-
-function analyticsSourceLabel(
-  source: AnalyticsDataSource | null,
-  hasAnalytics: boolean,
-): string {
-  if (source === "error") {
-    return "source: fetch_error";
-  }
-  if (source === "unavailable") {
-    return "source: unavailable";
-  }
-  if (!hasAnalytics) {
-    return "source: fallback";
-  }
-  return "source: projection_or_fallback";
 }
 
 export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {

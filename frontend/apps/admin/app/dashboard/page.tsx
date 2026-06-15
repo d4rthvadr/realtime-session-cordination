@@ -12,10 +12,17 @@ import {
   SessionSnapshot,
   AnalyticsOverview,
   AnalyticsFreshness,
-  AnalyticsDataSource,
 } from "@/lib/actions";
+import {
+  AnalyticsHealth,
+  deriveAnalyticsHealth,
+  analyticsHealthBadgeClasses,
+  analyticsHealthLabel,
+  analyticsSourceLabel,
+} from "@/lib/analytics-health";
 import { formatClock } from "@/lib/session";
 import { cn } from "@/lib/utils";
+import { getSessionStatusBadgeClasses } from "@/lib/session-status";
 import {
   ChartConfig,
   ChartContainer,
@@ -65,87 +72,6 @@ function InfoHint({ text }: { text: string }) {
   );
 }
 
-type AnalyticsHealth =
-  | "healthy"
-  | "lagging"
-  | "stale"
-  | "unavailable"
-  | "error";
-
-function deriveAnalyticsHealth(
-  freshness: AnalyticsFreshness | null,
-  source: AnalyticsDataSource | null,
-): AnalyticsHealth {
-  if (source === "error") {
-    return "error";
-  }
-  if (!freshness) {
-    return "unavailable";
-  }
-
-  if (freshness.pendingCount > 0) {
-    return "lagging";
-  }
-
-  if (freshness.lastProcessedAt) {
-    const lastProcessed = Date.parse(freshness.lastProcessedAt);
-    if (Number.isFinite(lastProcessed)) {
-      const ageSeconds = Math.max(0, (Date.now() - lastProcessed) / 1000);
-      if (ageSeconds > 120) {
-        return "stale";
-      }
-    }
-  }
-
-  return "healthy";
-}
-
-function analyticsHealthBadgeClasses(health: AnalyticsHealth): string {
-  switch (health) {
-    case "healthy":
-      return "bg-emerald-50 text-emerald-700 border-emerald-200";
-    case "lagging":
-      return "bg-amber-50 text-amber-700 border-amber-200";
-    case "stale":
-      return "bg-orange-50 text-orange-700 border-orange-200";
-    case "error":
-      return "bg-red-50 text-red-700 border-red-200";
-    default:
-      return "bg-slate-100 text-slate-700 border-slate-200";
-  }
-}
-
-function analyticsHealthLabel(health: AnalyticsHealth): string {
-  switch (health) {
-    case "healthy":
-      return "ANALYTICS HEALTHY";
-    case "lagging":
-      return "ANALYTICS LAGGING";
-    case "stale":
-      return "ANALYTICS STALE";
-    case "error":
-      return "ANALYTICS ERROR";
-    default:
-      return "ANALYTICS UNAVAILABLE";
-  }
-}
-
-function analyticsSourceLabel(
-  source: AnalyticsDataSource | null,
-  hasOverview: boolean,
-): string {
-  if (source === "error") {
-    return "source: fetch_error";
-  }
-  if (source === "unavailable") {
-    return "source: unavailable";
-  }
-  if (!hasOverview) {
-    return "source: fallback";
-  }
-  return "source: projection_or_fallback";
-}
-
 function GlobalTimeHealthSection({
   totalSessions,
   activeSessions,
@@ -189,7 +115,7 @@ function GlobalTimeHealthSection({
                   analyticsHealthBadgeClasses(analyticsHealth),
                 )}
               >
-                {analyticsHealthLabel(analyticsHealth)}
+                {analyticsHealthLabel(analyticsHealth, "dashboard")}
               </Badge>
               <p className="text-[11px] text-slate-500 text-right">
                 {analyticsSource}
@@ -566,13 +492,11 @@ function SessionCoordinationLogSection({
   isPending,
   error,
   onRefresh,
-  getStatusColor,
 }: {
   sessions: SessionSnapshot[];
   isPending: boolean;
   error: string | null;
   onRefresh: () => void;
-  getStatusColor: (status: string) => string;
 }) {
   return (
     <Card className="lg:col-span-6 border-slate-200">
@@ -641,7 +565,7 @@ function SessionCoordinationLogSection({
                       <Badge
                         className={cn(
                           "text-[10px] font-semibold border",
-                          getStatusColor(session.status),
+                          getSessionStatusBadgeClasses(session.status),
                         )}
                       >
                         {session.status}
@@ -887,19 +811,6 @@ function DashboardPageComponent() {
     onTime: { label: "On Time", color: "hsl(var(--chart-1))" },
   } satisfies ChartConfig;
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "LIVE":
-        return "bg-emerald-100 text-emerald-700 border-emerald-200";
-      case "PAUSED":
-        return "bg-amber-100 text-amber-700 border-amber-200";
-      case "ENDED":
-        return "bg-slate-100 text-slate-600 border-slate-200";
-      default:
-        return "bg-blue-100 text-blue-700 border-blue-200";
-    }
-  };
-
   const analyticsHealth = deriveAnalyticsHealth(
     overviewFreshness,
     overviewSource,
@@ -957,7 +868,6 @@ function DashboardPageComponent() {
           isPending={isPending}
           error={error}
           onRefresh={loadSessions}
-          getStatusColor={getStatusColor}
         />
       </section>
     </div>
