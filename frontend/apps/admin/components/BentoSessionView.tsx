@@ -24,11 +24,14 @@ import {
   ProgramItemCreateInput,
   SessionLogSnapshot,
   SessionAnalyticsSummary,
+  AnalyticsFreshness,
+  AnalyticsDataSource,
 } from "@/lib/actions";
 import { formatClock } from "@/lib/session";
 import { buildAdminWsUrl, getViewerUrl } from "@/lib/backend";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -62,9 +65,88 @@ import TimerWidget from "@/components/widgets/TimerWidget";
 import AttendeeStats from "@/components/widgets/AttendeeStats";
 import SessionLog, { LogEntry } from "@/components/widgets/SessionLog";
 import AgendaProgress from "@/components/widgets/AgendaProgress";
+import { cn } from "@/lib/utils";
 
 interface BentoSessionViewProps {
   sessionId: string;
+}
+
+type AnalyticsHealth =
+  | "healthy"
+  | "lagging"
+  | "stale"
+  | "unavailable"
+  | "error";
+
+function deriveAnalyticsHealth(
+  freshness: AnalyticsFreshness | null,
+  source: AnalyticsDataSource | null,
+): AnalyticsHealth {
+  if (source === "error") {
+    return "error";
+  }
+  if (!freshness) {
+    return "unavailable";
+  }
+  if (freshness.pendingCount > 0) {
+    return "lagging";
+  }
+  if (freshness.lastProcessedAt) {
+    const lastProcessed = Date.parse(freshness.lastProcessedAt);
+    if (Number.isFinite(lastProcessed)) {
+      const ageSeconds = Math.max(0, (Date.now() - lastProcessed) / 1000);
+      if (ageSeconds > 120) {
+        return "stale";
+      }
+    }
+  }
+  return "healthy";
+}
+
+function analyticsHealthBadgeClasses(health: AnalyticsHealth): string {
+  switch (health) {
+    case "healthy":
+      return "bg-emerald-50 text-emerald-700 border-emerald-200";
+    case "lagging":
+      return "bg-amber-50 text-amber-700 border-amber-200";
+    case "stale":
+      return "bg-orange-50 text-orange-700 border-orange-200";
+    case "error":
+      return "bg-red-50 text-red-700 border-red-200";
+    default:
+      return "bg-slate-100 text-slate-700 border-slate-200";
+  }
+}
+
+function analyticsHealthLabel(health: AnalyticsHealth): string {
+  switch (health) {
+    case "healthy":
+      return "HEALTHY";
+    case "lagging":
+      return "LAGGING";
+    case "stale":
+      return "STALE";
+    case "error":
+      return "ERROR";
+    default:
+      return "UNAVAILABLE";
+  }
+}
+
+function analyticsSourceLabel(
+  source: AnalyticsDataSource | null,
+  hasAnalytics: boolean,
+): string {
+  if (source === "error") {
+    return "source: fetch_error";
+  }
+  if (source === "unavailable") {
+    return "source: unavailable";
+  }
+  if (!hasAnalytics) {
+    return "source: fallback";
+  }
+  return "source: projection_or_fallback";
 }
 
 export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
@@ -74,6 +156,10 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
   const [analytics, setAnalytics] = useState<SessionAnalyticsSummary | null>(
     null,
   );
+  const [analyticsFreshness, setAnalyticsFreshness] =
+    useState<AnalyticsFreshness | null>(null);
+  const [analyticsSource, setAnalyticsSource] =
+    useState<AnalyticsDataSource | null>(null);
   const [controlToken, setControlToken] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -117,9 +203,14 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
 
       if (analyticsResult.error) {
         setAnalyticsError(analyticsResult.error);
+        setAnalytics(null);
+        setAnalyticsFreshness(analyticsResult.freshness);
+        setAnalyticsSource(analyticsResult.source);
       } else {
         setAnalyticsError(null);
         setAnalytics(analyticsResult.analytics);
+        setAnalyticsFreshness(analyticsResult.freshness);
+        setAnalyticsSource(analyticsResult.source);
       }
     });
   }, [sessionId]);
@@ -554,6 +645,14 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
 
   const fallbackAnalytics = buildFallbackAnalytics(session, programItems);
   const effectiveAnalytics = analytics ?? fallbackAnalytics;
+  const analyticsHealth = deriveAnalyticsHealth(
+    analyticsFreshness,
+    analyticsSource,
+  );
+  const analyticsSourceText = analyticsSourceLabel(
+    analyticsSource,
+    Boolean(analytics),
+  );
 
   const statusChartData = [
     {
@@ -839,9 +938,19 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
             <div className="grid grid-cols-12 gap-3 sm:gap-4">
               <Card className="col-span-12">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-base sm:text-lg">
-                    Analytics Snapshot
-                  </CardTitle>
+                  <div className="flex items-center justify-between gap-3">
+                    <CardTitle className="text-base sm:text-lg">
+                      Analytics Snapshot
+                    </CardTitle>
+                    <Badge
+                      className={cn(
+                        "text-[10px] font-semibold border uppercase tracking-wider",
+                        analyticsHealthBadgeClasses(analyticsHealth),
+                      )}
+                    >
+                      {analyticsHealthLabel(analyticsHealth)}
+                    </Badge>
+                  </div>
                 </CardHeader>
                 <CardContent className="space-y-3 sm:space-y-4">
                   {analyticsError ? (
@@ -850,6 +959,18 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
                       current session state.
                     </div>
                   ) : null}
+
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs text-slate-600">
+                      {analyticsSourceText}
+                      {analyticsFreshness
+                        ? ` • pending ${analyticsFreshness.pendingCount}`
+                        : ""}
+                      {analyticsFreshness?.lastProcessedAt
+                        ? ` • last processed ${new Date(analyticsFreshness.lastProcessedAt).toLocaleTimeString()}`
+                        : ""}
+                    </p>
+                  </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div className="rounded-lg border p-4">

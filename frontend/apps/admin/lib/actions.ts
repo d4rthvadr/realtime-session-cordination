@@ -180,6 +180,52 @@ export interface AnalyticsOverview {
   computedAt: string;
 }
 
+export interface AnalyticsFreshness {
+  workerName: string;
+  lastEventId: string;
+  lastProcessedAt: string | null;
+  pendingCount: number;
+  oldestPendingAt: string | null;
+}
+
+export type AnalyticsDataSource =
+  | "projection_or_fallback"
+  | "unavailable"
+  | "error";
+
+function normalizeAnalyticsFreshness(data: any): AnalyticsFreshness | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  const workerName = typeof data.workerName === "string" ? data.workerName : "";
+  const lastEventId =
+    typeof data.lastEventId === "string" ? data.lastEventId : "";
+  const lastProcessedAtRaw =
+    typeof data.lastProcessedAt === "string" ? data.lastProcessedAt : null;
+  const oldestPendingAtRaw =
+    typeof data.oldestPendingAt === "string" ? data.oldestPendingAt : null;
+  const pendingCount =
+    typeof data.pendingCount === "number" ? data.pendingCount : 0;
+
+  if (
+    !workerName &&
+    !lastEventId &&
+    !lastProcessedAtRaw &&
+    pendingCount === 0
+  ) {
+    return null;
+  }
+
+  return {
+    workerName,
+    lastEventId,
+    lastProcessedAt: lastProcessedAtRaw,
+    pendingCount,
+    oldestPendingAt: oldestPendingAtRaw,
+  };
+}
+
 function runtimeResult(runtime: RuntimeSnapshot | null, error: string | null) {
   return {
     runtime,
@@ -245,6 +291,8 @@ export async function getSessionAnalytics(sessionId: string) {
     if (!headers) {
       return unauthorizedResult({
         analytics: null as SessionAnalyticsSummary | null,
+        freshness: null as AnalyticsFreshness | null,
+        source: "unavailable" as AnalyticsDataSource,
       });
     }
 
@@ -260,6 +308,8 @@ export async function getSessionAnalytics(sessionId: string) {
     if (response.status === 401) {
       return unauthorizedResult({
         analytics: null as SessionAnalyticsSummary | null,
+        freshness: null as AnalyticsFreshness | null,
+        source: "unavailable" as AnalyticsDataSource,
       });
     }
 
@@ -270,8 +320,11 @@ export async function getSessionAnalytics(sessionId: string) {
     }
 
     const data = await response.json();
+    const freshness = normalizeAnalyticsFreshness(data.freshness);
     return {
       analytics: data.analytics as SessionAnalyticsSummary,
+      freshness,
+      source: "projection_or_fallback" as AnalyticsDataSource,
       error: null,
     };
   } catch (error) {
@@ -281,6 +334,8 @@ export async function getSessionAnalytics(sessionId: string) {
         : "Failed to fetch session analytics";
     return {
       analytics: null as SessionAnalyticsSummary | null,
+      freshness: null as AnalyticsFreshness | null,
+      source: "error" as AnalyticsDataSource,
       error: message,
     };
   }
@@ -293,6 +348,8 @@ export async function getAnalyticsOverview() {
     if (!headers) {
       return unauthorizedResult({
         overview: null as AnalyticsOverview | null,
+        freshness: null as AnalyticsFreshness | null,
+        source: "unavailable" as AnalyticsDataSource,
       });
     }
 
@@ -308,6 +365,8 @@ export async function getAnalyticsOverview() {
     if (response.status === 401) {
       return unauthorizedResult({
         overview: null as AnalyticsOverview | null,
+        freshness: null as AnalyticsFreshness | null,
+        source: "unavailable" as AnalyticsDataSource,
       });
     }
 
@@ -318,8 +377,11 @@ export async function getAnalyticsOverview() {
     }
 
     const data = await response.json();
+    const freshness = normalizeAnalyticsFreshness(data.freshness);
     return {
       overview: data.overview as AnalyticsOverview,
+      freshness,
+      source: "projection_or_fallback" as AnalyticsDataSource,
       error: null,
     };
   } catch (error) {
@@ -327,7 +389,12 @@ export async function getAnalyticsOverview() {
       error instanceof Error
         ? error.message
         : "Failed to fetch analytics overview";
-    return { overview: null as AnalyticsOverview | null, error: message };
+    return {
+      overview: null as AnalyticsOverview | null,
+      freshness: null as AnalyticsFreshness | null,
+      source: "error" as AnalyticsDataSource,
+      error: message,
+    };
   }
 }
 

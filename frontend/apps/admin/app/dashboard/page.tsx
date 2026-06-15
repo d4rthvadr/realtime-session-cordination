@@ -11,6 +11,8 @@ import {
   getSessionsList,
   SessionSnapshot,
   AnalyticsOverview,
+  AnalyticsFreshness,
+  AnalyticsDataSource,
 } from "@/lib/actions";
 import { formatClock } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -63,17 +65,104 @@ function InfoHint({ text }: { text: string }) {
   );
 }
 
+type AnalyticsHealth =
+  | "healthy"
+  | "lagging"
+  | "stale"
+  | "unavailable"
+  | "error";
+
+function deriveAnalyticsHealth(
+  freshness: AnalyticsFreshness | null,
+  source: AnalyticsDataSource | null,
+): AnalyticsHealth {
+  if (source === "error") {
+    return "error";
+  }
+  if (!freshness) {
+    return "unavailable";
+  }
+
+  if (freshness.pendingCount > 0) {
+    return "lagging";
+  }
+
+  if (freshness.lastProcessedAt) {
+    const lastProcessed = Date.parse(freshness.lastProcessedAt);
+    if (Number.isFinite(lastProcessed)) {
+      const ageSeconds = Math.max(0, (Date.now() - lastProcessed) / 1000);
+      if (ageSeconds > 120) {
+        return "stale";
+      }
+    }
+  }
+
+  return "healthy";
+}
+
+function analyticsHealthBadgeClasses(health: AnalyticsHealth): string {
+  switch (health) {
+    case "healthy":
+      return "bg-emerald-50 text-emerald-700 border-emerald-200";
+    case "lagging":
+      return "bg-amber-50 text-amber-700 border-amber-200";
+    case "stale":
+      return "bg-orange-50 text-orange-700 border-orange-200";
+    case "error":
+      return "bg-red-50 text-red-700 border-red-200";
+    default:
+      return "bg-slate-100 text-slate-700 border-slate-200";
+  }
+}
+
+function analyticsHealthLabel(health: AnalyticsHealth): string {
+  switch (health) {
+    case "healthy":
+      return "ANALYTICS HEALTHY";
+    case "lagging":
+      return "ANALYTICS LAGGING";
+    case "stale":
+      return "ANALYTICS STALE";
+    case "error":
+      return "ANALYTICS ERROR";
+    default:
+      return "ANALYTICS UNAVAILABLE";
+  }
+}
+
+function analyticsSourceLabel(
+  source: AnalyticsDataSource | null,
+  hasOverview: boolean,
+): string {
+  if (source === "error") {
+    return "source: fetch_error";
+  }
+  if (source === "unavailable") {
+    return "source: unavailable";
+  }
+  if (!hasOverview) {
+    return "source: fallback";
+  }
+  return "source: projection_or_fallback";
+}
+
 function GlobalTimeHealthSection({
   totalSessions,
   activeSessions,
   todaySessions,
   avgDuration,
+  analyticsHealth,
+  analyticsSource,
+  freshness,
   onRefresh,
 }: {
   totalSessions: number;
   activeSessions: number;
   todaySessions: number;
   avgDuration: number;
+  analyticsHealth: AnalyticsHealth;
+  analyticsSource: string;
+  freshness: AnalyticsFreshness | null;
   onRefresh: () => void;
 }) {
   return (
@@ -89,10 +178,24 @@ function GlobalTimeHealthSection({
                 Real-time enterprise synchronization status
               </p>
             </div>
-            <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-50">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse mr-2"></span>
-              NETWORK OPTIMIZED
-            </Badge>
+            <div className="flex flex-col items-end gap-2">
+              <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-50">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse mr-2"></span>
+                NETWORK OPTIMIZED
+              </Badge>
+              <Badge
+                className={cn(
+                  "text-[10px] font-semibold border uppercase tracking-wider",
+                  analyticsHealthBadgeClasses(analyticsHealth),
+                )}
+              >
+                {analyticsHealthLabel(analyticsHealth)}
+              </Badge>
+              <p className="text-[11px] text-slate-500 text-right">
+                {analyticsSource}
+                {freshness ? ` • pending ${freshness.pendingCount}` : ""}
+              </p>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -573,6 +676,10 @@ function SessionCoordinationLogSection({
 function DashboardPageComponent() {
   const [sessions, setSessions] = useState<SessionSnapshot[]>([]);
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
+  const [overviewFreshness, setOverviewFreshness] =
+    useState<AnalyticsFreshness | null>(null);
+  const [overviewSource, setOverviewSource] =
+    useState<AnalyticsDataSource | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -591,8 +698,12 @@ function DashboardPageComponent() {
 
       if (overviewResult.error) {
         setOverview(null);
+        setOverviewFreshness(overviewResult.freshness);
+        setOverviewSource(overviewResult.source);
       } else {
         setOverview(overviewResult.overview);
+        setOverviewFreshness(overviewResult.freshness);
+        setOverviewSource(overviewResult.source);
       }
     });
   };
@@ -789,6 +900,15 @@ function DashboardPageComponent() {
     }
   };
 
+  const analyticsHealth = deriveAnalyticsHealth(
+    overviewFreshness,
+    overviewSource,
+  );
+  const overviewAnalyticsSource = analyticsSourceLabel(
+    overviewSource,
+    Boolean(overview),
+  );
+
   return (
     <div className="max-w-[1600px] mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
       <GlobalTimeHealthSection
@@ -796,6 +916,9 @@ function DashboardPageComponent() {
         activeSessions={activeSessions}
         todaySessions={fallbackTodaySessions}
         avgDuration={avgDuration}
+        analyticsHealth={analyticsHealth}
+        analyticsSource={overviewAnalyticsSource}
+        freshness={overviewFreshness}
         onRefresh={loadSessions}
       />
 
