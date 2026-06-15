@@ -95,7 +95,15 @@ func main() {
 	analyticsManager := analytics.NewManager()
 	analyticsEmitter := analytics.NewEmitter(analyticsIngestionStore)
 	if analyticsProcessorStore != nil {
-		processor := analytics.NewProcessor(analyticsProcessorStore, logger, analytics.ProcessorConfig{})
+		processorCfg := analytics.ProcessorConfig{}
+		if projectionStore, ok := analyticsProcessorStore.(analytics.ProjectionStore); ok {
+			processorCfg.ProjectionBuilder = analytics.NewProjectionBuilder(projectionStore, analyticsManager)
+			processorCfg.GetSessionSnapshot = manager.GetSnapshot
+			processorCfg.ListProgramItemSnapshots = programItemManager.ListSnapshots
+			processorCfg.ListSessionSnapshots = manager.ListSnapshots
+		}
+
+		processor := analytics.NewProcessor(analyticsProcessorStore, logger, processorCfg)
 		go processor.Start(context.Background())
 	}
 	hub := ws.NewHub(logger)
