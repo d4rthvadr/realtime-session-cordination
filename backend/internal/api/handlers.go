@@ -29,6 +29,7 @@ type Handler struct {
 	sessionLogManager  *sessionlog.Manager
 	analyticsManager   *analytics.Manager
 	analyticsEmitter   *analytics.Emitter
+	analyticsProcessorStore analytics.ProcessorStore
 	hub                *ws.Hub
 	authService        *auth.Service
 	logger             *slog.Logger
@@ -61,6 +62,7 @@ func NewHandler(
 	sessionLogManager *sessionlog.Manager,
 	analyticsManager *analytics.Manager,
 	analyticsEmitter *analytics.Emitter,
+	analyticsProcessorStore analytics.ProcessorStore,
 	hub *ws.Hub,
 	authService *auth.Service,
 	logger *slog.Logger,
@@ -76,6 +78,7 @@ func NewHandler(
 		sessionLogManager:  sessionLogManager,
 		analyticsManager:   analyticsManager,
 		analyticsEmitter:   analyticsEmitter,
+		analyticsProcessorStore: analyticsProcessorStore,
 		hub:                hub,
 		authService:        authService,
 		logger:             logger,
@@ -284,7 +287,16 @@ func (h *Handler) getSessionAnalytics(c *gin.Context) {
 	}
 
 	summary := h.analyticsManager.BuildSessionSummary(sessionSnap, items, time.Now().UTC())
-	c.JSON(http.StatusOK, gin.H{"analytics": summary})
+	response := gin.H{"analytics": summary}
+	if h.analyticsProcessorStore != nil {
+		freshness, freshErr := h.analyticsProcessorStore.GetFreshness("analytics_processor", time.Now().UTC())
+		if freshErr != nil {
+			h.logger.Error("analytics_freshness_load_failed", "error", freshErr)
+		} else {
+			response["freshness"] = freshness
+		}
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *Handler) getAnalyticsOverview(c *gin.Context) {
@@ -315,7 +327,16 @@ func (h *Handler) getAnalyticsOverview(c *gin.Context) {
 	}
 
 	overview := h.analyticsManager.BuildPlatformOverview(sessions, itemsBySession, time.Now().UTC())
-	c.JSON(http.StatusOK, gin.H{"overview": overview})
+	response := gin.H{"overview": overview}
+	if h.analyticsProcessorStore != nil {
+		freshness, freshErr := h.analyticsProcessorStore.GetFreshness("analytics_processor", time.Now().UTC())
+		if freshErr != nil {
+			h.logger.Error("analytics_freshness_load_failed", "error", freshErr)
+		} else {
+			response["freshness"] = freshness
+		}
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *Handler) getCurrentProgramItem(c *gin.Context) {

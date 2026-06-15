@@ -3,6 +3,7 @@ package analytics
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -246,6 +247,307 @@ func (s *SqliteStore) SaveCheckpoint(checkpoint ProcessorCheckpoint) error {
 	}
 
 	return nil
+}
+
+func (s *SqliteStore) ClaimPendingForProcessing(workerName string, leaseUntil time.Time, limit int, now time.Time) ([]OutboxRecord, error) {
+	if workerName == "" {
+		return nil, fmt.Errorf("worker name is required")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if leaseUntil.IsZero() {
+		leaseUntil = now.Add(15 * time.Second)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin outbox claim transaction: %w", err)
+	}
+
+	rows, err := tx.Query(`
+		SELECT id, event_id, state, lease_owner, leased_until, attempt, last_error, created_at, updated_at
+		FROM analytics_outbox
+		WHERE state = ?
+		  AND (leased_until IS NULL OR leased_until < ?)
+		ORDER BY created_at ASC
+		LIMIT ?
+	`, OutboxStatePending, now.UTC().Format(time.RFC3339Nano), limit)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("failed to query pending outbox rows: %w", err)
+	}
+	defer rows.Close()
+
+	type candidate struct {
+		id      int64
+		eventID string
+	}
+	candidates := make([]candidate, 0, limit)
+	for rows.Next() {
+		var rec OutboxRecord
+		var leaseOwnerRaw sql.NullString
+		var leasedUntilRaw sql.NullString
+		var lastErrorRaw sql.NullString
+		var createdAtRaw string
+		var updatedAtRaw string
+		if err = rows.Scan(&rec.ID, &rec.EventID, &rec.State, &leaseOwnerRaw, &leasedUntilRaw, &rec.Attempt, &lastErrorRaw, &createdAtRaw, &updatedAtRaw); err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("failed to scan pending outbox row: %w", err)
+		}
+		if leaseOwnerRaw.Valid {
+			rec.LeaseOwner = leaseOwnerRaw.String
+		}
+		if lastErrorRaw.Valid {
+			rec.LastError = lastErrorRaw.String
+		}
+		createdAt, parseErr := time.Parse(time.RFC3339Nano, createdAtRaw)
+		if parseErr != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("failed to parse created_at for pending outbox row: %w", parseErr)
+		}
+		updatedAt, parseErr := time.Parse(time.RFC3339Nano, updatedAtRaw)
+		if parseErr != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("failed to parse updated_at for pending outbox row: %w", parseErr)
+		}
+		rec.CreatedAt = createdAt
+		rec.UpdatedAt = updatedAt
+		candidates = append(candidates, candidate{id: rec.ID, eventID: rec.EventID})
+	}
+	if err = rows.Err(); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("failed to iterate pending outbox rows: %w", err)
+	}
+
+	claimed := make([]OutboxRecord, 0, len(candidates))
+	for _, c := range candidates {
+		res, updateErr := tx.Exec(`
+			UPDATE analytics_outbox
+			SET state = ?,
+				lease_owner = ?,
+				leased_until = ?,
+				attempt = attempt + 1,
+				updated_at = ?
+			WHERE id = ?
+			  AND state = ?
+			  AND (leased_until IS NULL OR leased_until < ?)
+		`, OutboxStateProcessing, workerName, leaseUntil.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), c.id, OutboxStatePending, now.UTC().Format(time.RFC3339Nano))
+		if updateErr != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("failed to claim outbox row %d: %w", c.id, updateErr)
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			continue
+		}
+
+		var rec OutboxRecord
+		var leaseOwnerRaw sql.NullString
+		var leasedUntilRaw sql.NullString
+		var lastErrorRaw sql.NullString
+		var createdAtRaw string
+		var updatedAtRaw string
+		if err = tx.QueryRow(`
+			SELECT id, event_id, state, lease_owner, leased_until, attempt, last_error, created_at, updated_at
+			FROM analytics_outbox
+			WHERE id = ?
+		`, c.id).Scan(&rec.ID, &rec.EventID, &rec.State, &leaseOwnerRaw, &leasedUntilRaw, &rec.Attempt, &lastErrorRaw, &createdAtRaw, &updatedAtRaw); err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("failed to read claimed outbox row %d: %w", c.id, err)
+		}
+		if leaseOwnerRaw.Valid {
+			rec.LeaseOwner = leaseOwnerRaw.String
+		}
+		if lastErrorRaw.Valid {
+			rec.LastError = lastErrorRaw.String
+		}
+		createdAt, parseErr := time.Parse(time.RFC3339Nano, createdAtRaw)
+		if parseErr != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("failed to parse created_at for claimed outbox row %d: %w", c.id, parseErr)
+		}
+		updatedAt, parseErr := time.Parse(time.RFC3339Nano, updatedAtRaw)
+		if parseErr != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("failed to parse updated_at for claimed outbox row %d: %w", c.id, parseErr)
+		}
+		rec.CreatedAt = createdAt
+		rec.UpdatedAt = updatedAt
+		if leasedUntilRaw.Valid {
+			ts, parseErr := time.Parse(time.RFC3339Nano, leasedUntilRaw.String)
+			if parseErr != nil {
+				_ = tx.Rollback()
+				return nil, fmt.Errorf("failed to parse leased_until for outbox row %d: %w", c.id, parseErr)
+			}
+			rec.LeasedUntil = &ts
+		}
+		claimed = append(claimed, rec)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit outbox claim transaction: %w", err)
+	}
+
+	return claimed, nil
+}
+
+func (s *SqliteStore) GetEvent(eventID string) (EventRecord, error) {
+	if eventID == "" {
+		return EventRecord{}, fmt.Errorf("event id is required")
+	}
+
+	var rec EventRecord
+	var occurredAtRaw string
+	var ingestedAtRaw string
+	var programItemIDRaw sql.NullString
+	var sourceRaw string
+	if err := s.db.QueryRow(`
+		SELECT id, session_id, program_item_id, event_key, occurred_at, ingested_at, source, payload_json
+		FROM analytics_events
+		WHERE id = ?
+	`, eventID).Scan(&rec.ID, &rec.SessionID, &programItemIDRaw, &rec.EventKey, &occurredAtRaw, &ingestedAtRaw, &sourceRaw, &rec.PayloadJSON); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return EventRecord{}, fmt.Errorf("analytics event not found: %w", err)
+		}
+		return EventRecord{}, fmt.Errorf("failed to load analytics event: %w", err)
+	}
+
+	occurredAt, err := time.Parse(time.RFC3339Nano, occurredAtRaw)
+	if err != nil {
+		return EventRecord{}, fmt.Errorf("failed to parse occurred_at: %w", err)
+	}
+	ingestedAt, err := time.Parse(time.RFC3339Nano, ingestedAtRaw)
+	if err != nil {
+		return EventRecord{}, fmt.Errorf("failed to parse ingested_at: %w", err)
+	}
+
+	rec.OccurredAt = occurredAt
+	rec.IngestedAt = ingestedAt
+	rec.Source = EventSource(sourceRaw)
+	if programItemIDRaw.Valid {
+		pid := programItemIDRaw.String
+		rec.ProgramItemID = &pid
+	}
+
+	return rec, nil
+}
+
+func (s *SqliteStore) MarkProcessed(outboxID int64, now time.Time) error {
+	if outboxID <= 0 {
+		return fmt.Errorf("outbox id is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	_, err := s.db.Exec(`
+		UPDATE analytics_outbox
+		SET state = ?, lease_owner = NULL, leased_until = NULL, last_error = NULL, updated_at = ?
+		WHERE id = ?
+	`, OutboxStateProcessed, now.UTC().Format(time.RFC3339Nano), outboxID)
+	if err != nil {
+		return fmt.Errorf("failed to mark outbox row processed: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SqliteStore) MarkFailed(outboxID int64, lastError string, deadLetter bool, now time.Time) error {
+	if outboxID <= 0 {
+		return fmt.Errorf("outbox id is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	nextState := OutboxStatePending
+	if deadLetter {
+		nextState = OutboxStateDeadLetter
+	}
+
+	_, err := s.db.Exec(`
+		UPDATE analytics_outbox
+		SET state = ?, lease_owner = NULL, leased_until = NULL, last_error = ?, updated_at = ?
+		WHERE id = ?
+	`, nextState, lastError, now.UTC().Format(time.RFC3339Nano), outboxID)
+	if err != nil {
+		return fmt.Errorf("failed to mark outbox row failed: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SqliteStore) LoadCheckpoint(workerName string) (ProcessorCheckpoint, bool, error) {
+	if workerName == "" {
+		return ProcessorCheckpoint{}, false, fmt.Errorf("worker name is required")
+	}
+
+	var cp ProcessorCheckpoint
+	var updatedAtRaw string
+	err := s.db.QueryRow(`
+		SELECT worker_name, last_event_id, updated_at
+		FROM analytics_checkpoints
+		WHERE worker_name = ?
+	`, workerName).Scan(&cp.WorkerName, &cp.LastEventID, &updatedAtRaw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ProcessorCheckpoint{}, false, nil
+		}
+		return ProcessorCheckpoint{}, false, fmt.Errorf("failed to load checkpoint: %w", err)
+	}
+
+	updatedAt, parseErr := time.Parse(time.RFC3339Nano, updatedAtRaw)
+	if parseErr != nil {
+		return ProcessorCheckpoint{}, false, fmt.Errorf("failed to parse checkpoint timestamp: %w", parseErr)
+	}
+	cp.UpdatedAt = updatedAt
+
+	return cp, true, nil
+}
+
+func (s *SqliteStore) GetFreshness(workerName string, now time.Time) (ProcessorFreshness, error) {
+	if workerName == "" {
+		return ProcessorFreshness{}, fmt.Errorf("worker name is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	freshness := ProcessorFreshness{WorkerName: workerName}
+
+	cp, ok, err := s.LoadCheckpoint(workerName)
+	if err != nil {
+		return ProcessorFreshness{}, err
+	}
+	if ok {
+		freshness.LastEventID = cp.LastEventID
+		ts := cp.UpdatedAt.UTC()
+		freshness.LastProcessedAt = &ts
+	}
+
+	var oldestPendingRaw sql.NullString
+	if err = s.db.QueryRow(`
+		SELECT COUNT(*), MIN(e.occurred_at)
+		FROM analytics_outbox o
+		JOIN analytics_events e ON e.id = o.event_id
+		WHERE o.state = ?
+	`, OutboxStatePending).Scan(&freshness.PendingCount, &oldestPendingRaw); err != nil {
+		return ProcessorFreshness{}, fmt.Errorf("failed to compute freshness pending stats: %w", err)
+	}
+
+	if oldestPendingRaw.Valid {
+		ts, parseErr := time.Parse(time.RFC3339Nano, oldestPendingRaw.String)
+		if parseErr != nil {
+			return ProcessorFreshness{}, fmt.Errorf("failed to parse oldest pending timestamp: %w", parseErr)
+		}
+		freshness.OldestPendingAt = &ts
+	}
+
+	return freshness, nil
 }
 
 func nullableProgramItemID(id *string) any {

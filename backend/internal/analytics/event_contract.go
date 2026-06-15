@@ -42,6 +42,15 @@ type ProcessorCheckpoint struct {
 	UpdatedAt   time.Time
 }
 
+// ProcessorFreshness exposes progress and lag metadata for analytics reads.
+type ProcessorFreshness struct {
+	WorkerName        string
+	LastEventID       string
+	LastProcessedAt   *time.Time
+	PendingCount      int
+	OldestPendingAt   *time.Time
+}
+
 // EventStore persists raw analytics events.
 type EventStore interface {
 	AppendEvent(record EventRecord) error
@@ -60,4 +69,15 @@ type OutboxStore interface {
 // CheckpointStore persists processor checkpoints.
 type CheckpointStore interface {
 	SaveCheckpoint(checkpoint ProcessorCheckpoint) error
+}
+
+// ProcessorStore supports outbox claiming and state transitions.
+type ProcessorStore interface {
+	ClaimPendingForProcessing(workerName string, leaseUntil time.Time, limit int, now time.Time) ([]OutboxRecord, error)
+	GetEvent(eventID string) (EventRecord, error)
+	MarkProcessed(outboxID int64, now time.Time) error
+	MarkFailed(outboxID int64, lastError string, deadLetter bool, now time.Time) error
+	SaveCheckpoint(checkpoint ProcessorCheckpoint) error
+	LoadCheckpoint(workerName string) (ProcessorCheckpoint, bool, error)
+	GetFreshness(workerName string, now time.Time) (ProcessorFreshness, error)
 }

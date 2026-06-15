@@ -1,19 +1,19 @@
 package api
 
 import (
-  "encoding/json"
-  "net/http"
-  "net/http/httptest"
-  "testing"
-  "time"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
 
-  "realtime-session-coordination/backend/internal/analytics"
-  "realtime-session-coordination/backend/internal/programitem"
-  "realtime-session-coordination/backend/internal/session"
-  "realtime-session-coordination/backend/internal/sessionlog"
-  "realtime-session-coordination/backend/internal/ws"
+	"realtime-session-coordination/backend/internal/analytics"
+	"realtime-session-coordination/backend/internal/programitem"
+	"realtime-session-coordination/backend/internal/session"
+	"realtime-session-coordination/backend/internal/sessionlog"
+	"realtime-session-coordination/backend/internal/ws"
 
-  "github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin"
 )
 
 type testIngestionStore struct {
@@ -41,7 +41,7 @@ func newTestHandler(t *testing.T) (*Handler, *session.Manager, *programitem.Mana
 
 	hub := ws.NewHub(nil)
 
-	return NewHandler(sessionMgr, programItemMgr, sessionLogMgr, analyticsMgr, analyticsEmitter, hub, nil, nil), sessionMgr, programItemMgr, sessionLogMgr, analyticsEmitter
+  return NewHandler(sessionMgr, programItemMgr, sessionLogMgr, analyticsMgr, analyticsEmitter, nil, hub, nil, nil), sessionMgr, programItemMgr, sessionLogMgr, analyticsEmitter
 }
 
 func TestListSessionLogsReturnsLogsAndCount(t *testing.T) {
