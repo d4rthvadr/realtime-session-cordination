@@ -263,33 +263,54 @@ func (h *Handler) listSessionLogs(c *gin.Context) {
 }
 
 func (h *Handler) getSessionAnalytics(c *gin.Context) {
-	if h.analyticsManager == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
-		return
-	}
-
-	if h.programItemManager == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
-		return
-	}
-
 	sessionID := c.Param("id")
-	sessionSnap, err := h.manager.GetSnapshot(sessionID)
-	if err != nil {
-		h.writeDomainErr(c, err)
-		return
+	now := time.Now().UTC()
+
+	var (
+		summary         analytics.SessionSummary
+		projectionFound bool
+	)
+
+	if h.analyticsProcessorStore != nil {
+		if projectionStore, ok := h.analyticsProcessorStore.(analytics.ProjectionStore); ok {
+			projection, found, projectionErr := projectionStore.GetSessionProjection(sessionID)
+			if projectionErr != nil {
+				h.logger.Error("analytics_session_projection_load_failed", "session_id", sessionID, "error", projectionErr)
+			} else if found {
+				summary = sessionSummaryFromProjection(projection)
+				projectionFound = true
+			}
+		}
 	}
 
-	items, err := h.programItemManager.ListSnapshots(sessionID)
-	if err != nil {
-		h.writeProgramItemErr(c, err)
-		return
+	if !projectionFound {
+		if h.analyticsManager == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
+			return
+		}
+		if h.programItemManager == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+			return
+		}
+
+		sessionSnap, err := h.manager.GetSnapshot(sessionID)
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+
+		items, err := h.programItemManager.ListSnapshots(sessionID)
+		if err != nil {
+			h.writeProgramItemErr(c, err)
+			return
+		}
+
+		summary = h.analyticsManager.BuildSessionSummary(sessionSnap, items, now)
 	}
 
-	summary := h.analyticsManager.BuildSessionSummary(sessionSnap, items, time.Now().UTC())
 	response := gin.H{"analytics": summary}
 	if h.analyticsProcessorStore != nil {
-		freshness, freshErr := h.analyticsProcessorStore.GetFreshness("analytics_processor", time.Now().UTC())
+		freshness, freshErr := h.analyticsProcessorStore.GetFreshness("analytics_processor", now)
 		if freshErr != nil {
 			h.logger.Error("analytics_freshness_load_failed", "error", freshErr)
 		} else {
@@ -300,36 +321,57 @@ func (h *Handler) getSessionAnalytics(c *gin.Context) {
 }
 
 func (h *Handler) getAnalyticsOverview(c *gin.Context) {
-	if h.analyticsManager == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
-		return
+	now := time.Now().UTC()
+
+	var (
+		overview         analytics.PlatformOverview
+		projectionFound  bool
+	)
+
+	if h.analyticsProcessorStore != nil {
+		if projectionStore, ok := h.analyticsProcessorStore.(analytics.ProjectionStore); ok {
+			projection, found, projectionErr := projectionStore.GetPlatformProjection()
+			if projectionErr != nil {
+				h.logger.Error("analytics_platform_projection_load_failed", "error", projectionErr)
+			} else if found {
+				overview = platformOverviewFromProjection(projection)
+				projectionFound = true
+			}
+		}
 	}
 
-	if h.programItemManager == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
-		return
-	}
-
-	sessions, err := h.manager.ListSnapshots()
-	if err != nil {
-		h.writeDomainErr(c, err)
-		return
-	}
-
-	itemsBySession := make(map[string][]programitem.Snapshot, len(sessions))
-	for _, sessionSnap := range sessions {
-		items, listErr := h.programItemManager.ListSnapshots(sessionSnap.ID)
-		if listErr != nil {
-			h.writeProgramItemErr(c, listErr)
+	if !projectionFound {
+		if h.analyticsManager == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
 			return
 		}
-		itemsBySession[sessionSnap.ID] = items
+		if h.programItemManager == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+			return
+		}
+
+		sessions, err := h.manager.ListSnapshots()
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+
+		itemsBySession := make(map[string][]programitem.Snapshot, len(sessions))
+		for _, sessionSnap := range sessions {
+			items, listErr := h.programItemManager.ListSnapshots(sessionSnap.ID)
+			if listErr != nil {
+				h.writeProgramItemErr(c, listErr)
+				return
+			}
+			itemsBySession[sessionSnap.ID] = items
+		}
+
+		overview = h.analyticsManager.BuildPlatformOverview(sessions, itemsBySession, now)
 	}
 
-	overview := h.analyticsManager.BuildPlatformOverview(sessions, itemsBySession, time.Now().UTC())
 	response := gin.H{"overview": overview}
 	if h.analyticsProcessorStore != nil {
-		freshness, freshErr := h.analyticsProcessorStore.GetFreshness("analytics_processor", time.Now().UTC())
+		freshness, freshErr := h.analyticsProcessorStore.GetFreshness("analytics_processor", now)
 		if freshErr != nil {
 			h.logger.Error("analytics_freshness_load_failed", "error", freshErr)
 		} else {
@@ -337,6 +379,56 @@ func (h *Handler) getAnalyticsOverview(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+func sessionSummaryFromProjection(p analytics.SessionProjection) analytics.SessionSummary {
+	return analytics.SessionSummary{
+		SessionID:              p.SessionID,
+		SessionStatus:          p.SessionStatus,
+		SessionDurationSeconds: p.SessionDurationSeconds,
+		ProgramItemCount:       p.ProgramItemCount,
+		ScheduledCount:         p.ScheduledCount,
+		InProgressCount:        p.InProgressCount,
+		PausedCount:            p.PausedCount,
+		EndedCount:             p.EndedCount,
+		CanceledCount:          p.CanceledCount,
+		PlannedSeconds:         p.PlannedSeconds,
+		EffectiveBudgetSeconds: p.EffectiveBudgetSeconds,
+		TotalAdjustmentSeconds: p.TotalAdjustmentSeconds,
+		TotalPauseSeconds:      p.TotalPauseSeconds,
+		TotalPauseCount:        p.TotalPauseCount,
+		EndedOnTimeCount:       p.EndedOnTimeCount,
+		OverrunItemCount:       p.OverrunItemCount,
+		TotalOverrunSeconds:    p.TotalOverrunSeconds,
+		TotalUnderrunSeconds:   p.TotalUnderrunSeconds,
+		EndedOnTimeRatio:       p.EndedOnTimeRatio,
+		ComputedAt:             p.ComputedAt,
+	}
+}
+
+func platformOverviewFromProjection(p analytics.PlatformProjection) analytics.PlatformOverview {
+	return analytics.PlatformOverview{
+		TotalSessions:            p.TotalSessions,
+		CreatedSessions:          p.CreatedSessions,
+		LiveSessions:             p.LiveSessions,
+		PausedSessions:           p.PausedSessions,
+		EndedSessions:            p.EndedSessions,
+		TotalProgramItems:        p.TotalProgramItems,
+		EndedProgramItems:        p.EndedProgramItems,
+		OnTimeEndedProgramItems:  p.OnTimeEndedProgramItems,
+		OverrunProgramItems:      p.OverrunProgramItems,
+		TotalSessionDurationSecs: p.TotalSessionDurationSecs,
+		TotalPlannedSeconds:      p.TotalPlannedSeconds,
+		EffectiveBudgetSeconds:   p.EffectiveBudgetSeconds,
+		TotalAdjustmentSeconds:   p.TotalAdjustmentSeconds,
+		TotalPauseSeconds:        p.TotalPauseSeconds,
+		TotalPauseCount:          p.TotalPauseCount,
+		TotalOverrunSeconds:      p.TotalOverrunSeconds,
+		TotalUnderrunSeconds:     p.TotalUnderrunSeconds,
+		SessionCompletionRatio:   p.SessionCompletionRatio,
+		ProgramItemOnTimeRatio:   p.ProgramItemOnTimeRatio,
+		ComputedAt:               p.ComputedAt,
+	}
 }
 
 func (h *Handler) getCurrentProgramItem(c *gin.Context) {
