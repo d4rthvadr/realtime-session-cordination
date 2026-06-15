@@ -33,6 +33,7 @@ import {
   analyticsHealthLabel,
   analyticsSourceLabel,
 } from "@/lib/analytics-health";
+import { formatLocalTime } from "@/lib/date-time";
 import { formatClock } from "@/lib/session";
 import { buildAdminWsUrl, getViewerUrl } from "@/lib/backend";
 import Link from "next/link";
@@ -1022,16 +1023,10 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
 }
 
 function formatLogTime(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return "--:--:--";
-  }
-
-  return parsed.toLocaleTimeString([], {
+  return formatLocalTime(value, {
     hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
+    includeSeconds: true,
+    fallback: "--:--:--",
   });
 }
 

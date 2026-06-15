@@ -3,6 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { formatClock } from "@/lib/session";
+import { formatLocalDateTime } from "@/lib/date-time";
 import { getSessionsList, SessionSnapshot } from "@/lib/actions";
 import EmptyState from "@/components/EmptyState";
 
@@ -82,7 +83,7 @@ export default function SessionsListPage() {
                       Speaker: {session.speakerName}
                     </p>
                     <p className="text-sm text-slate-500">
-                      Created: {new Date(session.createdAt).toLocaleString()}
+                      Created: {formatLocalDateTime(session.createdAt)}
                     </p>
                   </div>
 

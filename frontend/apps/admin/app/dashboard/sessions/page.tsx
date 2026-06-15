@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import SessionCreateModal from "@/components/SessionCreateModal";
 import { getSessionsList, SessionSnapshot } from "@/lib/actions";
+import { formatLocalDate } from "@/lib/date-time";
 import { formatClock } from "@/lib/session";
 import { getSessionStatusBadgeClasses } from "@/lib/session-status";
 import { Clock, Calendar, Plus, ExternalLink } from "lucide-react";
@@ -132,7 +133,7 @@ export default function SessionsListPage() {
                         {formatClock(session.durationSeconds, "00:00")}
                       </td>
                       <td className="p-4 text-sm text-slate-500">
-                        {new Date(session.createdAt).toLocaleDateString()}
+                        {formatLocalDate(session.createdAt)}
                       </td>
                       <td className="p-4">
                         <Link href={`/dashboard/sessions/${session.id}`}>
