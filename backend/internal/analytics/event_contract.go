@@ -81,3 +81,61 @@ type ProcessorStore interface {
 	LoadCheckpoint(workerName string) (ProcessorCheckpoint, bool, error)
 	GetFreshness(workerName string, now time.Time) (ProcessorFreshness, error)
 }
+
+// SessionProjection is the materialized per-session analytics summary produced by the processor.
+type SessionProjection struct {
+	SessionID              string
+	SessionStatus          string
+	SessionDurationSeconds int
+	ProgramItemCount       int
+	ScheduledCount         int
+	InProgressCount        int
+	PausedCount            int
+	EndedCount             int
+	CanceledCount          int
+	PlannedSeconds         int
+	EffectiveBudgetSeconds int
+	TotalAdjustmentSeconds int
+	TotalPauseSeconds      int
+	TotalPauseCount        int
+	EndedOnTimeCount       int
+	OverrunItemCount       int
+	TotalOverrunSeconds    int
+	TotalUnderrunSeconds   int
+	EndedOnTimeRatio       float64
+	ComputedAt             time.Time
+	UpdatedAt              time.Time
+}
+
+// PlatformProjection is the materialized platform-wide analytics summary produced by the processor.
+type PlatformProjection struct {
+	TotalSessions            int
+	CreatedSessions          int
+	LiveSessions             int
+	PausedSessions           int
+	EndedSessions            int
+	TotalProgramItems        int
+	EndedProgramItems        int
+	OnTimeEndedProgramItems  int
+	OverrunProgramItems      int
+	TotalSessionDurationSecs int
+	TotalPlannedSeconds      int
+	EffectiveBudgetSeconds   int
+	TotalAdjustmentSeconds   int
+	TotalPauseSeconds        int
+	TotalPauseCount          int
+	TotalOverrunSeconds      int
+	TotalUnderrunSeconds     int
+	SessionCompletionRatio   float64
+	ProgramItemOnTimeRatio   float64
+	ComputedAt               time.Time
+	UpdatedAt                time.Time
+}
+
+// ProjectionStore persists and retrieves materialized analytics projections.
+type ProjectionStore interface {
+	UpsertSessionProjection(p SessionProjection) error
+	GetSessionProjection(sessionID string) (SessionProjection, bool, error)
+	UpsertPlatformProjection(p PlatformProjection) error
+	GetPlatformProjection() (PlatformProjection, bool, error)
+}

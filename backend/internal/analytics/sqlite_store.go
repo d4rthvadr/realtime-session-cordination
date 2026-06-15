@@ -17,7 +17,7 @@ const (
 	OutboxStateDeadLetter = "dead_letter"
 )
 
-// SqliteStore persists analytics events, outbox records, and processor checkpoints.
+// SqliteStore persists analytics events, outbox records, processor checkpoints, and projections.
 type SqliteStore struct {
 	db *sql.DB
 }
@@ -50,54 +50,95 @@ func NewSqliteStore(dbPath string) (*SqliteStore, error) {
 }
 
 func (s *SqliteStore) runMigrations() error {
-	query := `
-	CREATE TABLE IF NOT EXISTS analytics_events (
-		id TEXT PRIMARY KEY,
-		session_id TEXT NOT NULL,
-		program_item_id TEXT,
-		event_key TEXT NOT NULL,
-		occurred_at TEXT NOT NULL,
-		ingested_at TEXT NOT NULL,
-		source TEXT NOT NULL CHECK(source IN ('server', 'client')),
-		payload_json TEXT NOT NULL,
-		created_at TEXT NOT NULL
-	);
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS analytics_events (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			program_item_id TEXT,
+			event_key TEXT NOT NULL,
+			occurred_at TEXT NOT NULL,
+			ingested_at TEXT NOT NULL,
+			source TEXT NOT NULL CHECK(source IN ('server', 'client')),
+			payload_json TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_events_session_occurred ON analytics_events(session_id, occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_events_event_key ON analytics_events(event_key)`,
+		`CREATE TABLE IF NOT EXISTS analytics_outbox (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id TEXT NOT NULL UNIQUE,
+			state TEXT NOT NULL CHECK(state IN ('pending', 'processing', 'processed', 'dead_letter')),
+			lease_owner TEXT,
+			leased_until TEXT,
+			attempt INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY (event_id) REFERENCES analytics_events(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_state_lease ON analytics_outbox(state, leased_until)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_created ON analytics_outbox(created_at)`,
+		`CREATE TABLE IF NOT EXISTS analytics_checkpoints (
+			worker_name TEXT PRIMARY KEY,
+			last_event_id TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY (last_event_id) REFERENCES analytics_events(id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS analytics_session_projections (
+			session_id TEXT PRIMARY KEY,
+			session_status TEXT NOT NULL DEFAULT '',
+			session_duration_seconds INTEGER NOT NULL DEFAULT 0,
+			program_item_count INTEGER NOT NULL DEFAULT 0,
+			scheduled_count INTEGER NOT NULL DEFAULT 0,
+			in_progress_count INTEGER NOT NULL DEFAULT 0,
+			paused_count INTEGER NOT NULL DEFAULT 0,
+			ended_count INTEGER NOT NULL DEFAULT 0,
+			canceled_count INTEGER NOT NULL DEFAULT 0,
+			planned_seconds INTEGER NOT NULL DEFAULT 0,
+			effective_budget_seconds INTEGER NOT NULL DEFAULT 0,
+			total_adjustment_seconds INTEGER NOT NULL DEFAULT 0,
+			total_pause_seconds INTEGER NOT NULL DEFAULT 0,
+			total_pause_count INTEGER NOT NULL DEFAULT 0,
+			ended_on_time_count INTEGER NOT NULL DEFAULT 0,
+			overrun_item_count INTEGER NOT NULL DEFAULT 0,
+			total_overrun_seconds INTEGER NOT NULL DEFAULT 0,
+			total_underrun_seconds INTEGER NOT NULL DEFAULT 0,
+			ended_on_time_ratio REAL NOT NULL DEFAULT 0,
+			computed_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS analytics_platform_projection (
+			id INTEGER PRIMARY KEY CHECK(id = 1),
+			total_sessions INTEGER NOT NULL DEFAULT 0,
+			created_sessions INTEGER NOT NULL DEFAULT 0,
+			live_sessions INTEGER NOT NULL DEFAULT 0,
+			paused_sessions INTEGER NOT NULL DEFAULT 0,
+			ended_sessions INTEGER NOT NULL DEFAULT 0,
+			total_program_items INTEGER NOT NULL DEFAULT 0,
+			ended_program_items INTEGER NOT NULL DEFAULT 0,
+			on_time_ended_program_items INTEGER NOT NULL DEFAULT 0,
+			overrun_program_items INTEGER NOT NULL DEFAULT 0,
+			total_session_duration_secs INTEGER NOT NULL DEFAULT 0,
+			total_planned_seconds INTEGER NOT NULL DEFAULT 0,
+			effective_budget_seconds INTEGER NOT NULL DEFAULT 0,
+			total_adjustment_seconds INTEGER NOT NULL DEFAULT 0,
+			total_pause_seconds INTEGER NOT NULL DEFAULT 0,
+			total_pause_count INTEGER NOT NULL DEFAULT 0,
+			total_overrun_seconds INTEGER NOT NULL DEFAULT 0,
+			total_underrun_seconds INTEGER NOT NULL DEFAULT 0,
+			session_completion_ratio REAL NOT NULL DEFAULT 0,
+			program_item_on_time_ratio REAL NOT NULL DEFAULT 0,
+			computed_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+	}
 
-	CREATE INDEX IF NOT EXISTS idx_analytics_events_session_occurred
-	ON analytics_events(session_id, occurred_at DESC);
-
-	CREATE INDEX IF NOT EXISTS idx_analytics_events_event_key
-	ON analytics_events(event_key);
-
-	CREATE TABLE IF NOT EXISTS analytics_outbox (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		event_id TEXT NOT NULL UNIQUE,
-		state TEXT NOT NULL CHECK(state IN ('pending', 'processing', 'processed', 'dead_letter')),
-		lease_owner TEXT,
-		leased_until TEXT,
-		attempt INTEGER NOT NULL DEFAULT 0,
-		last_error TEXT,
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL,
-		FOREIGN KEY (event_id) REFERENCES analytics_events(id) ON DELETE CASCADE
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_analytics_outbox_state_lease
-	ON analytics_outbox(state, leased_until);
-
-	CREATE INDEX IF NOT EXISTS idx_analytics_outbox_created
-	ON analytics_outbox(created_at);
-
-	CREATE TABLE IF NOT EXISTS analytics_checkpoints (
-		worker_name TEXT PRIMARY KEY,
-		last_event_id TEXT NOT NULL,
-		updated_at TEXT NOT NULL,
-		FOREIGN KEY (last_event_id) REFERENCES analytics_events(id)
-	);
-	`
-
-	_, err := s.db.Exec(query)
-	return err
+	for _, stmt := range statements {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("migration failed: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *SqliteStore) AppendEvent(record EventRecord) error {
@@ -155,17 +196,9 @@ func (s *SqliteStore) appendEvent(exec dbExec, record EventRecord) error {
 
 	_, err := exec.Exec(`
 		INSERT INTO analytics_events (
-			id,
-			session_id,
-			program_item_id,
-			event_key,
-			occurred_at,
-			ingested_at,
-			source,
-			payload_json,
-			created_at
-		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			id, session_id, program_item_id, event_key,
+			occurred_at, ingested_at, source, payload_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.ID,
 		record.SessionID,
@@ -199,16 +232,8 @@ func (s *SqliteStore) enqueue(exec dbExec, eventID string, now time.Time) error 
 
 	_, err := exec.Exec(`
 		INSERT INTO analytics_outbox (
-			event_id,
-			state,
-			lease_owner,
-			leased_until,
-			attempt,
-			last_error,
-			created_at,
-			updated_at
-		)
-		VALUES (?, ?, NULL, NULL, 0, NULL, ?, ?)
+			event_id, state, lease_owner, leased_until, attempt, last_error, created_at, updated_at
+		) VALUES (?, ?, NULL, NULL, 0, NULL, ?, ?)
 	`, eventID, OutboxStatePending, timestamp, timestamp)
 	if err != nil {
 		return fmt.Errorf("failed to enqueue analytics event: %w", err)
@@ -231,14 +256,9 @@ func (s *SqliteStore) SaveCheckpoint(checkpoint ProcessorCheckpoint) error {
 	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO analytics_checkpoints (
-			worker_name,
-			last_event_id,
-			updated_at
-		)
+		INSERT INTO analytics_checkpoints (worker_name, last_event_id, updated_at)
 		VALUES (?, ?, ?)
-		ON CONFLICT(worker_name)
-		DO UPDATE SET
+		ON CONFLICT(worker_name) DO UPDATE SET
 			last_event_id = excluded.last_event_id,
 			updated_at = excluded.updated_at
 	`, checkpoint.WorkerName, checkpoint.LastEventID, updatedAt.Format(time.RFC3339Nano))
@@ -289,11 +309,8 @@ func (s *SqliteStore) ClaimPendingForProcessing(workerName string, leaseUntil ti
 	candidates := make([]candidate, 0, limit)
 	for rows.Next() {
 		var rec OutboxRecord
-		var leaseOwnerRaw sql.NullString
-		var leasedUntilRaw sql.NullString
-		var lastErrorRaw sql.NullString
-		var createdAtRaw string
-		var updatedAtRaw string
+		var leaseOwnerRaw, leasedUntilRaw, lastErrorRaw sql.NullString
+		var createdAtRaw, updatedAtRaw string
 		if err = rows.Scan(&rec.ID, &rec.EventID, &rec.State, &leaseOwnerRaw, &leasedUntilRaw, &rec.Attempt, &lastErrorRaw, &createdAtRaw, &updatedAtRaw); err != nil {
 			_ = tx.Rollback()
 			return nil, fmt.Errorf("failed to scan pending outbox row: %w", err)
@@ -327,11 +344,7 @@ func (s *SqliteStore) ClaimPendingForProcessing(workerName string, leaseUntil ti
 	for _, c := range candidates {
 		res, updateErr := tx.Exec(`
 			UPDATE analytics_outbox
-			SET state = ?,
-				lease_owner = ?,
-				leased_until = ?,
-				attempt = attempt + 1,
-				updated_at = ?
+			SET state = ?, lease_owner = ?, leased_until = ?, attempt = attempt + 1, updated_at = ?
 			WHERE id = ?
 			  AND state = ?
 			  AND (leased_until IS NULL OR leased_until < ?)
@@ -346,15 +359,11 @@ func (s *SqliteStore) ClaimPendingForProcessing(workerName string, leaseUntil ti
 		}
 
 		var rec OutboxRecord
-		var leaseOwnerRaw sql.NullString
-		var leasedUntilRaw sql.NullString
-		var lastErrorRaw sql.NullString
-		var createdAtRaw string
-		var updatedAtRaw string
+		var leaseOwnerRaw, leasedUntilRaw, lastErrorRaw sql.NullString
+		var createdAtRaw, updatedAtRaw string
 		if err = tx.QueryRow(`
 			SELECT id, event_id, state, lease_owner, leased_until, attempt, last_error, created_at, updated_at
-			FROM analytics_outbox
-			WHERE id = ?
+			FROM analytics_outbox WHERE id = ?
 		`, c.id).Scan(&rec.ID, &rec.EventID, &rec.State, &leaseOwnerRaw, &leasedUntilRaw, &rec.Attempt, &lastErrorRaw, &createdAtRaw, &updatedAtRaw); err != nil {
 			_ = tx.Rollback()
 			return nil, fmt.Errorf("failed to read claimed outbox row %d: %w", c.id, err)
@@ -401,14 +410,11 @@ func (s *SqliteStore) GetEvent(eventID string) (EventRecord, error) {
 	}
 
 	var rec EventRecord
-	var occurredAtRaw string
-	var ingestedAtRaw string
+	var occurredAtRaw, ingestedAtRaw, sourceRaw string
 	var programItemIDRaw sql.NullString
-	var sourceRaw string
 	if err := s.db.QueryRow(`
 		SELECT id, session_id, program_item_id, event_key, occurred_at, ingested_at, source, payload_json
-		FROM analytics_events
-		WHERE id = ?
+		FROM analytics_events WHERE id = ?
 	`, eventID).Scan(&rec.ID, &rec.SessionID, &programItemIDRaw, &rec.EventKey, &occurredAtRaw, &ingestedAtRaw, &sourceRaw, &rec.PayloadJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return EventRecord{}, fmt.Errorf("analytics event not found: %w", err)
@@ -490,8 +496,7 @@ func (s *SqliteStore) LoadCheckpoint(workerName string) (ProcessorCheckpoint, bo
 	var updatedAtRaw string
 	err := s.db.QueryRow(`
 		SELECT worker_name, last_event_id, updated_at
-		FROM analytics_checkpoints
-		WHERE worker_name = ?
+		FROM analytics_checkpoints WHERE worker_name = ?
 	`, workerName).Scan(&cp.WorkerName, &cp.LastEventID, &updatedAtRaw)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -548,6 +553,197 @@ func (s *SqliteStore) GetFreshness(workerName string, now time.Time) (ProcessorF
 	}
 
 	return freshness, nil
+}
+
+func (s *SqliteStore) UpsertSessionProjection(p SessionProjection) error {
+	if p.SessionID == "" {
+		return fmt.Errorf("session id is required")
+	}
+	now := time.Now().UTC()
+	if p.ComputedAt.IsZero() {
+		p.ComputedAt = now
+	}
+	if p.UpdatedAt.IsZero() {
+		p.UpdatedAt = now
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO analytics_session_projections (
+			session_id, session_status, session_duration_seconds,
+			program_item_count, scheduled_count, in_progress_count, paused_count,
+			ended_count, canceled_count, planned_seconds, effective_budget_seconds,
+			total_adjustment_seconds, total_pause_seconds, total_pause_count,
+			ended_on_time_count, overrun_item_count, total_overrun_seconds,
+			total_underrun_seconds, ended_on_time_ratio, computed_at, updated_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(session_id) DO UPDATE SET
+			session_status = excluded.session_status,
+			session_duration_seconds = excluded.session_duration_seconds,
+			program_item_count = excluded.program_item_count,
+			scheduled_count = excluded.scheduled_count,
+			in_progress_count = excluded.in_progress_count,
+			paused_count = excluded.paused_count,
+			ended_count = excluded.ended_count,
+			canceled_count = excluded.canceled_count,
+			planned_seconds = excluded.planned_seconds,
+			effective_budget_seconds = excluded.effective_budget_seconds,
+			total_adjustment_seconds = excluded.total_adjustment_seconds,
+			total_pause_seconds = excluded.total_pause_seconds,
+			total_pause_count = excluded.total_pause_count,
+			ended_on_time_count = excluded.ended_on_time_count,
+			overrun_item_count = excluded.overrun_item_count,
+			total_overrun_seconds = excluded.total_overrun_seconds,
+			total_underrun_seconds = excluded.total_underrun_seconds,
+			ended_on_time_ratio = excluded.ended_on_time_ratio,
+			computed_at = excluded.computed_at,
+			updated_at = excluded.updated_at
+	`,
+		p.SessionID, p.SessionStatus, p.SessionDurationSeconds,
+		p.ProgramItemCount, p.ScheduledCount, p.InProgressCount, p.PausedCount,
+		p.EndedCount, p.CanceledCount, p.PlannedSeconds, p.EffectiveBudgetSeconds,
+		p.TotalAdjustmentSeconds, p.TotalPauseSeconds, p.TotalPauseCount,
+		p.EndedOnTimeCount, p.OverrunItemCount, p.TotalOverrunSeconds,
+		p.TotalUnderrunSeconds, p.EndedOnTimeRatio,
+		p.ComputedAt.UTC().Format(time.RFC3339Nano),
+		p.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert session projection: %w", err)
+	}
+	return nil
+}
+
+func (s *SqliteStore) GetSessionProjection(sessionID string) (SessionProjection, bool, error) {
+	if sessionID == "" {
+		return SessionProjection{}, false, fmt.Errorf("session id is required")
+	}
+	var p SessionProjection
+	var computedAtRaw, updatedAtRaw string
+	err := s.db.QueryRow(`
+		SELECT session_id, session_status, session_duration_seconds,
+			program_item_count, scheduled_count, in_progress_count, paused_count,
+			ended_count, canceled_count, planned_seconds, effective_budget_seconds,
+			total_adjustment_seconds, total_pause_seconds, total_pause_count,
+			ended_on_time_count, overrun_item_count, total_overrun_seconds,
+			total_underrun_seconds, ended_on_time_ratio, computed_at, updated_at
+		FROM analytics_session_projections WHERE session_id = ?
+	`, sessionID).Scan(
+		&p.SessionID, &p.SessionStatus, &p.SessionDurationSeconds,
+		&p.ProgramItemCount, &p.ScheduledCount, &p.InProgressCount, &p.PausedCount,
+		&p.EndedCount, &p.CanceledCount, &p.PlannedSeconds, &p.EffectiveBudgetSeconds,
+		&p.TotalAdjustmentSeconds, &p.TotalPauseSeconds, &p.TotalPauseCount,
+		&p.EndedOnTimeCount, &p.OverrunItemCount, &p.TotalOverrunSeconds,
+		&p.TotalUnderrunSeconds, &p.EndedOnTimeRatio, &computedAtRaw, &updatedAtRaw,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SessionProjection{}, false, nil
+		}
+		return SessionProjection{}, false, fmt.Errorf("failed to get session projection: %w", err)
+	}
+	computedAt, err := time.Parse(time.RFC3339Nano, computedAtRaw)
+	if err != nil {
+		return SessionProjection{}, false, fmt.Errorf("failed to parse computed_at: %w", err)
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, updatedAtRaw)
+	if err != nil {
+		return SessionProjection{}, false, fmt.Errorf("failed to parse updated_at: %w", err)
+	}
+	p.ComputedAt = computedAt
+	p.UpdatedAt = updatedAt
+	return p, true, nil
+}
+
+func (s *SqliteStore) UpsertPlatformProjection(p PlatformProjection) error {
+	now := time.Now().UTC()
+	if p.ComputedAt.IsZero() {
+		p.ComputedAt = now
+	}
+	if p.UpdatedAt.IsZero() {
+		p.UpdatedAt = now
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO analytics_platform_projection (
+			id, total_sessions, created_sessions, live_sessions, paused_sessions, ended_sessions,
+			total_program_items, ended_program_items, on_time_ended_program_items, overrun_program_items,
+			total_session_duration_secs, total_planned_seconds, effective_budget_seconds,
+			total_adjustment_seconds, total_pause_seconds, total_pause_count,
+			total_overrun_seconds, total_underrun_seconds,
+			session_completion_ratio, program_item_on_time_ratio, computed_at, updated_at
+		) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET
+			total_sessions = excluded.total_sessions,
+			created_sessions = excluded.created_sessions,
+			live_sessions = excluded.live_sessions,
+			paused_sessions = excluded.paused_sessions,
+			ended_sessions = excluded.ended_sessions,
+			total_program_items = excluded.total_program_items,
+			ended_program_items = excluded.ended_program_items,
+			on_time_ended_program_items = excluded.on_time_ended_program_items,
+			overrun_program_items = excluded.overrun_program_items,
+			total_session_duration_secs = excluded.total_session_duration_secs,
+			total_planned_seconds = excluded.total_planned_seconds,
+			effective_budget_seconds = excluded.effective_budget_seconds,
+			total_adjustment_seconds = excluded.total_adjustment_seconds,
+			total_pause_seconds = excluded.total_pause_seconds,
+			total_pause_count = excluded.total_pause_count,
+			total_overrun_seconds = excluded.total_overrun_seconds,
+			total_underrun_seconds = excluded.total_underrun_seconds,
+			session_completion_ratio = excluded.session_completion_ratio,
+			program_item_on_time_ratio = excluded.program_item_on_time_ratio,
+			computed_at = excluded.computed_at,
+			updated_at = excluded.updated_at
+	`,
+		p.TotalSessions, p.CreatedSessions, p.LiveSessions, p.PausedSessions, p.EndedSessions,
+		p.TotalProgramItems, p.EndedProgramItems, p.OnTimeEndedProgramItems, p.OverrunProgramItems,
+		p.TotalSessionDurationSecs, p.TotalPlannedSeconds, p.EffectiveBudgetSeconds,
+		p.TotalAdjustmentSeconds, p.TotalPauseSeconds, p.TotalPauseCount,
+		p.TotalOverrunSeconds, p.TotalUnderrunSeconds,
+		p.SessionCompletionRatio, p.ProgramItemOnTimeRatio,
+		p.ComputedAt.UTC().Format(time.RFC3339Nano),
+		p.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert platform projection: %w", err)
+	}
+	return nil
+}
+
+func (s *SqliteStore) GetPlatformProjection() (PlatformProjection, bool, error) {
+	var p PlatformProjection
+	var computedAtRaw, updatedAtRaw string
+	err := s.db.QueryRow(`
+		SELECT total_sessions, created_sessions, live_sessions, paused_sessions, ended_sessions,
+			total_program_items, ended_program_items, on_time_ended_program_items, overrun_program_items,
+			total_session_duration_secs, total_planned_seconds, effective_budget_seconds,
+			total_adjustment_seconds, total_pause_seconds, total_pause_count,
+			total_overrun_seconds, total_underrun_seconds,
+			session_completion_ratio, program_item_on_time_ratio, computed_at, updated_at
+		FROM analytics_platform_projection WHERE id = 1
+	`).Scan(
+		&p.TotalSessions, &p.CreatedSessions, &p.LiveSessions, &p.PausedSessions, &p.EndedSessions,
+		&p.TotalProgramItems, &p.EndedProgramItems, &p.OnTimeEndedProgramItems, &p.OverrunProgramItems,
+		&p.TotalSessionDurationSecs, &p.TotalPlannedSeconds, &p.EffectiveBudgetSeconds,
+		&p.TotalAdjustmentSeconds, &p.TotalPauseSeconds, &p.TotalPauseCount,
+		&p.TotalOverrunSeconds, &p.TotalUnderrunSeconds,
+		&p.SessionCompletionRatio, &p.ProgramItemOnTimeRatio, &computedAtRaw, &updatedAtRaw,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PlatformProjection{}, false, nil
+		}
+		return PlatformProjection{}, false, fmt.Errorf("failed to get platform projection: %w", err)
+	}
+	computedAt, err := time.Parse(time.RFC3339Nano, computedAtRaw)
+	if err != nil {
+		return PlatformProjection{}, false, fmt.Errorf("failed to parse computed_at: %w", err)
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, updatedAtRaw)
+	if err != nil {
+		return PlatformProjection{}, false, fmt.Errorf("failed to parse updated_at: %w", err)
+	}
+	p.ComputedAt = computedAt
+	p.UpdatedAt = updatedAt
+	return p, true, nil
 }
 
 func nullableProgramItemID(id *string) any {
