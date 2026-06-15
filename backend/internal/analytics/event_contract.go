@@ -44,11 +44,11 @@ type ProcessorCheckpoint struct {
 
 // ProcessorFreshness exposes progress and lag metadata for analytics reads.
 type ProcessorFreshness struct {
-	WorkerName        string
-	LastEventID       string
-	LastProcessedAt   *time.Time
-	PendingCount      int
-	OldestPendingAt   *time.Time
+	WorkerName      string     `json:"workerName"`
+	LastEventID     string     `json:"lastEventId"`
+	LastProcessedAt *time.Time `json:"lastProcessedAt,omitempty"`
+	PendingCount    int        `json:"pendingCount"`
+	OldestPendingAt *time.Time `json:"oldestPendingAt,omitempty"`
 }
 
 // EventStore persists raw analytics events.

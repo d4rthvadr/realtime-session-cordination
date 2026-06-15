@@ -205,9 +205,23 @@ Response shape:
     "totalUnderrunSeconds": 140,
     "endedOnTimeRatio": 0.7142857143,
     "computedAt": "2026-06-02T11:00:00Z"
+  },
+  "freshness": {
+    "workerName": "analytics_processor",
+    "lastEventId": "evt_abc123",
+    "lastProcessedAt": "2026-06-15T12:00:00Z",
+    "pendingCount": 0,
+    "oldestPendingAt": null
   }
 }
 ```
+
+Notes:
+
+- `freshness` is optional and only present when analytics processor store is configured and freshness lookup succeeds.
+- Handler behavior is projection-first with fallback:
+  - attempts to read `analytics_session_projections` via projection store
+  - falls back to on-demand `BuildSessionSummary` when projection is unavailable
 
 Platform overview analytics:
 
@@ -238,9 +252,29 @@ Response shape:
     "sessionCompletionRatio": 0.8333333333,
     "programItemOnTimeRatio": 0.7730496454,
     "computedAt": "2026-06-02T11:00:00Z"
+  },
+  "freshness": {
+    "workerName": "analytics_processor",
+    "lastEventId": "evt_abc123",
+    "lastProcessedAt": "2026-06-15T12:00:00Z",
+    "pendingCount": 0,
+    "oldestPendingAt": null
   }
 }
 ```
+
+Notes:
+
+- `freshness` uses normalized camelCase JSON fields:
+  - `workerName`
+  - `lastEventId`
+  - `lastProcessedAt`
+  - `pendingCount`
+  - `oldestPendingAt`
+- `freshness` is optional and omitted when lookup fails.
+- Handler behavior is projection-first with fallback:
+  - attempts to read `analytics_platform_projection` via projection store
+  - falls back to on-demand `BuildPlatformOverview` when projection is unavailable
 
 ### Session Log Taxonomy (Phase 1A)
 
