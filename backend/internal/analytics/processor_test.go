@@ -152,3 +152,90 @@ func TestProcessorSchedulesRetryWhenAttemptsRemain(t *testing.T) {
 		t.Fatalf("expected retry timestamp to be in the future, got %s", store.nextRetryAt.Format(time.RFC3339Nano))
 	}
 }
+
+type cleanupProcessorStore struct {
+	processedCalls int
+	deadCalls      int
+	eventCalls     int
+}
+
+func (s *cleanupProcessorStore) ClaimPendingForProcessing(workerName string, leaseUntil time.Time, limit int, now time.Time) ([]OutboxRecord, error) {
+	return nil, nil
+}
+
+func (s *cleanupProcessorStore) GetEvent(eventID string) (EventRecord, error) {
+	return EventRecord{}, nil
+}
+
+func (s *cleanupProcessorStore) MarkProcessed(outboxID int64, now time.Time) error {
+	return nil
+}
+
+func (s *cleanupProcessorStore) MarkFailed(outboxID int64, lastError string, deadLetter bool, nextRetryAt *time.Time, now time.Time) error {
+	return nil
+}
+
+func (s *cleanupProcessorStore) SaveCheckpoint(checkpoint ProcessorCheckpoint) error {
+	return nil
+}
+
+func (s *cleanupProcessorStore) LoadCheckpoint(workerName string) (ProcessorCheckpoint, bool, error) {
+	return ProcessorCheckpoint{}, false, nil
+}
+
+func (s *cleanupProcessorStore) GetFreshness(workerName string, now time.Time) (ProcessorFreshness, error) {
+	return ProcessorFreshness{}, nil
+}
+
+func (s *cleanupProcessorStore) CleanupProcessedOutbox(olderThan time.Time) (int64, error) {
+	s.processedCalls++
+	return 1, nil
+}
+
+func (s *cleanupProcessorStore) CleanupDeadLetters(olderThan time.Time) (int64, error) {
+	s.deadCalls++
+	return 1, nil
+}
+
+func (s *cleanupProcessorStore) CleanupEvents(olderThan time.Time) (int64, error) {
+	s.eventCalls++
+	return 1, nil
+}
+
+func TestProcessorRunScheduledCleanupHonorsCadence(t *testing.T) {
+	store := &cleanupProcessorStore{}
+
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	processor := NewProcessor(store, nil, ProcessorConfig{
+		CleanupInterval:          10 * time.Minute,
+		ProcessedOutboxRetention: 24 * time.Hour,
+		DeadLetterRetention:      7 * 24 * time.Hour,
+		EventRetention:           14 * 24 * time.Hour,
+	})
+	processor.nowFn = func() time.Time { return now }
+
+	if err := processor.runScheduledCleanup(); err != nil {
+		t.Fatalf("first cleanup run failed: %v", err)
+	}
+	if store.processedCalls != 1 || store.deadCalls != 1 || store.eventCalls != 1 {
+		t.Fatalf("expected cleanup methods to run once, got processed=%d dead=%d events=%d", store.processedCalls, store.deadCalls, store.eventCalls)
+	}
+
+	// second run within interval should not invoke cleanup methods again
+	now = now.Add(5 * time.Minute)
+	if err := processor.runScheduledCleanup(); err != nil {
+		t.Fatalf("second cleanup run failed: %v", err)
+	}
+	if store.processedCalls != 1 || store.deadCalls != 1 || store.eventCalls != 1 {
+		t.Fatalf("expected cleanup cadence gate to skip second run")
+	}
+
+	// third run beyond interval should execute again
+	now = now.Add(6 * time.Minute)
+	if err := processor.runScheduledCleanup(); err != nil {
+		t.Fatalf("third cleanup run failed: %v", err)
+	}
+	if store.processedCalls != 2 || store.deadCalls != 2 || store.eventCalls != 2 {
+		t.Fatalf("expected cleanup methods to run twice total, got processed=%d dead=%d events=%d", store.processedCalls, store.deadCalls, store.eventCalls)
+	}
+}

@@ -95,7 +95,12 @@ func main() {
 	analyticsManager := analytics.NewManager()
 	analyticsEmitter := analytics.NewEmitter(analyticsIngestionStore)
 	if analyticsProcessorStore != nil {
-		processorCfg := analytics.ProcessorConfig{}
+		processorCfg := analytics.ProcessorConfig{
+			CleanupInterval:          cfg.AnalyticsCleanupInterval,
+			ProcessedOutboxRetention: cfg.AnalyticsProcessedOutboxRetention,
+			DeadLetterRetention:      cfg.AnalyticsDeadLetterRetention,
+			EventRetention:           cfg.AnalyticsEventRetention,
+		}
 		if projectionStore, ok := analyticsProcessorStore.(analytics.ProjectionStore); ok {
 			processorCfg.ProjectionBuilder = analytics.NewProjectionBuilder(projectionStore, analyticsManager)
 			processorCfg.GetSessionSnapshot = manager.GetSnapshot

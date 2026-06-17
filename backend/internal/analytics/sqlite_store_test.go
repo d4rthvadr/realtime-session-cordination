@@ -210,3 +210,103 @@ func TestSqliteStoreDeadLetterListGetAndRetry(t *testing.T) {
 		t.Fatalf("expected attempt to restart at 1 after retry, got %d", claimedAgain[0].Attempt)
 	}
 }
+
+func TestSqliteStoreCleanupRetentionMethods(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "analytics-test-cleanup.db")
+
+	store, err := NewSqliteStore(dbPath)
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+
+	now := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
+	old := now.Add(-72 * time.Hour)
+
+	oldProcessedEventID := "evt_old_processed"
+	if err = store.AppendEventAndEnqueue(EventRecord{
+		ID:          oldProcessedEventID,
+		SessionID:   "sess_cleanup",
+		EventKey:    "SESSION_STARTED",
+		OccurredAt:  old,
+		IngestedAt:  old,
+		Source:      EventSourceServer,
+		PayloadJSON: []byte(`{"type":"SESSION_STARTED"}`),
+	}, old); err != nil {
+		t.Fatalf("append old processed event: %v", err)
+	}
+
+	var oldProcessedOutboxID int64
+	if err = store.db.QueryRow(`SELECT id FROM analytics_outbox WHERE event_id = ?`, oldProcessedEventID).Scan(&oldProcessedOutboxID); err != nil {
+		t.Fatalf("read old processed outbox id: %v", err)
+	}
+	if _, err = store.db.Exec(`UPDATE analytics_outbox SET state = ?, updated_at = ? WHERE id = ?`, OutboxStateProcessed, old.Format(time.RFC3339Nano), oldProcessedOutboxID); err != nil {
+		t.Fatalf("seed old processed row: %v", err)
+	}
+
+	oldDeadEventID := "evt_old_dead"
+	if err = store.AppendEventAndEnqueue(EventRecord{
+		ID:          oldDeadEventID,
+		SessionID:   "sess_cleanup",
+		EventKey:    "SESSION_PAUSED",
+		OccurredAt:  old,
+		IngestedAt:  old,
+		Source:      EventSourceServer,
+		PayloadJSON: []byte(`{"type":"SESSION_PAUSED"}`),
+	}, old); err != nil {
+		t.Fatalf("append old dead-letter event: %v", err)
+	}
+
+	var oldDeadOutboxID int64
+	if err = store.db.QueryRow(`SELECT id FROM analytics_outbox WHERE event_id = ?`, oldDeadEventID).Scan(&oldDeadOutboxID); err != nil {
+		t.Fatalf("read old dead outbox id: %v", err)
+	}
+	if _, err = store.db.Exec(`UPDATE analytics_outbox SET state = ?, updated_at = ? WHERE id = ?`, OutboxStateDeadLetter, old.Format(time.RFC3339Nano), oldDeadOutboxID); err != nil {
+		t.Fatalf("seed old dead-letter row: %v", err)
+	}
+
+	// This event has no outbox row and should be removable by event cleanup.
+	orphanEventID := "evt_orphan_old"
+	if err = store.AppendEvent(EventRecord{
+		ID:          orphanEventID,
+		SessionID:   "sess_cleanup",
+		EventKey:    "SESSION_RESUMED",
+		OccurredAt:  old,
+		IngestedAt:  old,
+		Source:      EventSourceServer,
+		PayloadJSON: []byte(`{"type":"SESSION_RESUMED"}`),
+	}); err != nil {
+		t.Fatalf("append orphan event: %v", err)
+	}
+
+	processedDeleted, err := store.CleanupProcessedOutbox(now.Add(-24 * time.Hour))
+	if err != nil {
+		t.Fatalf("cleanup processed outbox: %v", err)
+	}
+	if processedDeleted != 1 {
+		t.Fatalf("expected 1 processed row deleted, got %d", processedDeleted)
+	}
+
+	deadDeleted, err := store.CleanupDeadLetters(now.Add(-24 * time.Hour))
+	if err != nil {
+		t.Fatalf("cleanup dead letters: %v", err)
+	}
+	if deadDeleted != 1 {
+		t.Fatalf("expected 1 dead-letter row deleted, got %d", deadDeleted)
+	}
+
+	eventsDeleted, err := store.CleanupEvents(now.Add(-24 * time.Hour))
+	if err != nil {
+		t.Fatalf("cleanup events: %v", err)
+	}
+	if eventsDeleted < 1 {
+		t.Fatalf("expected at least 1 event deleted, got %d", eventsDeleted)
+	}
+
+	var orphanCount int
+	if err = store.db.QueryRow(`SELECT COUNT(*) FROM analytics_events WHERE id = ?`, orphanEventID).Scan(&orphanCount); err != nil {
+		t.Fatalf("read orphan event count: %v", err)
+	}
+	if orphanCount != 0 {
+		t.Fatalf("expected orphan old event to be deleted")
+	}
+}

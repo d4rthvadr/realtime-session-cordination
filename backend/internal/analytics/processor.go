@@ -18,6 +18,10 @@ type ProcessorConfig struct {
 	BatchSize     int
 	MaxAttempts   int
 	RetryPolicy   RetryPolicy
+	CleanupInterval          time.Duration
+	ProcessedOutboxRetention time.Duration
+	DeadLetterRetention      time.Duration
+	EventRetention           time.Duration
 
 	ProjectionBuilder        *ProjectionBuilder
 	GetSessionSnapshot       func(sessionID string) (session.Snapshot, error)
@@ -27,9 +31,11 @@ type ProcessorConfig struct {
 
 // Processor consumes outbox records and advances processing checkpoints.
 type Processor struct {
-	store  ProcessorStore
-	logger *slog.Logger
-	cfg    ProcessorConfig
+	store         ProcessorStore
+	logger        *slog.Logger
+	cfg           ProcessorConfig
+	lastCleanupAt time.Time
+	nowFn         func() time.Time
 }
 
 func NewProcessor(store ProcessorStore, logger *slog.Logger, cfg ProcessorConfig) *Processor {
@@ -54,12 +60,31 @@ func NewProcessor(store ProcessorStore, logger *slog.Logger, cfg ProcessorConfig
 	if cfg.RetryPolicy.MaxDelay <= 0 {
 		cfg.RetryPolicy.MaxDelay = DefaultRetryPolicy().MaxDelay
 	}
+	if cfg.CleanupInterval <= 0 {
+		cfg.CleanupInterval = 10 * time.Minute
+	}
+	if cfg.ProcessedOutboxRetention <= 0 {
+		cfg.ProcessedOutboxRetention = 24 * time.Hour
+	}
+	if cfg.DeadLetterRetention <= 0 {
+		cfg.DeadLetterRetention = 7 * 24 * time.Hour
+	}
+	if cfg.EventRetention <= 0 {
+		cfg.EventRetention = 14 * 24 * time.Hour
+	}
 
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	return &Processor{store: store, logger: logger, cfg: cfg}
+	return &Processor{
+		store:  store,
+		logger: logger,
+		cfg:    cfg,
+		nowFn: func() time.Time {
+			return time.Now().UTC()
+		},
+	}
 }
 
 func (p *Processor) Start(ctx context.Context) {
@@ -75,6 +100,9 @@ func (p *Processor) Start(ctx context.Context) {
 		if err := p.processBatch(ctx); err != nil {
 			p.logger.Error("analytics_processor_batch_failed", "worker", p.cfg.WorkerName, "error", err)
 		}
+		if err := p.runScheduledCleanup(); err != nil {
+			p.logger.Error("analytics_processor_cleanup_failed", "worker", p.cfg.WorkerName, "error", err)
+		}
 
 		select {
 		case <-ctx.Done():
@@ -86,7 +114,7 @@ func (p *Processor) Start(ctx context.Context) {
 }
 
 func (p *Processor) processBatch(ctx context.Context) error {
-	now := time.Now().UTC()
+	now := p.nowUTC()
 	leaseUntil := now.Add(p.cfg.LeaseDuration)
 
 	rows, err := p.store.ClaimPendingForProcessing(p.cfg.WorkerName, leaseUntil, p.cfg.BatchSize, now)
@@ -104,7 +132,7 @@ func (p *Processor) processBatch(ctx context.Context) error {
 		default:
 		}
 
-		batchNow := time.Now().UTC()
+		batchNow := p.nowUTC()
 
 		event, eventErr := p.store.GetEvent(row.EventID)
 		if eventErr != nil {
@@ -136,11 +164,58 @@ func (p *Processor) processBatch(ctx context.Context) error {
 			continue
 		}
 
-		if markErr := p.store.MarkProcessed(row.ID, time.Now().UTC()); markErr != nil {
+		if markErr := p.store.MarkProcessed(row.ID, p.nowUTC()); markErr != nil {
 			p.logger.Error("analytics_processor_mark_processed_error", "outbox_id", row.ID, "error", markErr)
 			continue
 		}
 	}
+
+	return nil
+}
+
+func (p *Processor) nowUTC() time.Time {
+	if p.nowFn != nil {
+		return p.nowFn().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (p *Processor) runScheduledCleanup() error {
+	cleanupStore, ok := p.store.(CleanupStore)
+	if !ok || cleanupStore == nil {
+		return nil
+	}
+
+	now := p.nowUTC()
+	if !p.lastCleanupAt.IsZero() && now.Before(p.lastCleanupAt.Add(p.cfg.CleanupInterval)) {
+		return nil
+	}
+
+	processedCutoff := now.Add(-p.cfg.ProcessedOutboxRetention)
+	deadLetterCutoff := now.Add(-p.cfg.DeadLetterRetention)
+	eventsCutoff := now.Add(-p.cfg.EventRetention)
+
+	processedDeleted, err := cleanupStore.CleanupProcessedOutbox(processedCutoff)
+	if err != nil {
+		return err
+	}
+	deadLettersDeleted, err := cleanupStore.CleanupDeadLetters(deadLetterCutoff)
+	if err != nil {
+		return err
+	}
+	eventsDeleted, err := cleanupStore.CleanupEvents(eventsCutoff)
+	if err != nil {
+		return err
+	}
+
+	p.lastCleanupAt = now
+	p.logger.Info(
+		"analytics_processor_cleanup_completed",
+		"worker", p.cfg.WorkerName,
+		"processed_outbox_deleted", processedDeleted,
+		"dead_letters_deleted", deadLettersDeleted,
+		"events_deleted", eventsDeleted,
+	)
 
 	return nil
 }

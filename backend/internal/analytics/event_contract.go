@@ -105,6 +105,13 @@ type DeadLetterStore interface {
 	RetryDeadLetter(outboxID int64, now time.Time) error
 }
 
+// CleanupStore provides retention cleanup operations for analytics persistence.
+type CleanupStore interface {
+	CleanupProcessedOutbox(olderThan time.Time) (int64, error)
+	CleanupDeadLetters(olderThan time.Time) (int64, error)
+	CleanupEvents(olderThan time.Time) (int64, error)
+}
+
 // SessionProjection is the materialized per-session analytics summary produced by the processor.
 type SessionProjection struct {
 	SessionID              string

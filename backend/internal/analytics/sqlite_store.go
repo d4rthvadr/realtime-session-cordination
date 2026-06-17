@@ -752,6 +752,60 @@ func (s *SqliteStore) RetryDeadLetter(outboxID int64, now time.Time) error {
 	return nil
 }
 
+func (s *SqliteStore) CleanupProcessedOutbox(olderThan time.Time) (int64, error) {
+	if olderThan.IsZero() {
+		return 0, fmt.Errorf("olderThan is required")
+	}
+
+	res, err := s.db.Exec(`
+		DELETE FROM analytics_outbox
+		WHERE state = ? AND updated_at < ?
+	`, OutboxStateProcessed, olderThan.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup processed outbox rows: %w", err)
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
+func (s *SqliteStore) CleanupDeadLetters(olderThan time.Time) (int64, error) {
+	if olderThan.IsZero() {
+		return 0, fmt.Errorf("olderThan is required")
+	}
+
+	res, err := s.db.Exec(`
+		DELETE FROM analytics_outbox
+		WHERE state = ? AND updated_at < ?
+	`, OutboxStateDeadLetter, olderThan.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup dead-letter outbox rows: %w", err)
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
+func (s *SqliteStore) CleanupEvents(olderThan time.Time) (int64, error) {
+	if olderThan.IsZero() {
+		return 0, fmt.Errorf("olderThan is required")
+	}
+
+	res, err := s.db.Exec(`
+		DELETE FROM analytics_events
+		WHERE ingested_at < ?
+		  AND NOT EXISTS (
+			SELECT 1 FROM analytics_outbox o WHERE o.event_id = analytics_events.id
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM analytics_checkpoints c WHERE c.last_event_id = analytics_events.id
+		  )
+	`, olderThan.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup analytics events: %w", err)
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
 func (s *SqliteStore) UpsertSessionProjection(p SessionProjection) error {
 	if p.SessionID == "" {
 		return fmt.Errorf("session id is required")
