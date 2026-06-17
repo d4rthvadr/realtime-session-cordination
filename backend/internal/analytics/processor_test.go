@@ -35,6 +35,7 @@ func TestProcessorProcessBatchMarksProcessedAndCheckpoint(t *testing.T) {
 		LeaseDuration: 5 * time.Second,
 		BatchSize:     10,
 		MaxAttempts:   3,
+		RetryPolicy:   DefaultRetryPolicy(),
 	})
 
 	if err = processor.processBatch(context.Background()); err != nil {
@@ -62,9 +63,10 @@ func TestProcessorProcessBatchMarksProcessedAndCheckpoint(t *testing.T) {
 }
 
 type failingProcessorStore struct {
-	claimedRows    []OutboxRecord
-	markFailedCall int
-	deadLetter     bool
+	claimedRows      []OutboxRecord
+	markFailedCall   int
+	deadLetter       bool
+	nextRetryAt      *time.Time
 }
 
 func (s *failingProcessorStore) ClaimPendingForProcessing(workerName string, leaseUntil time.Time, limit int, now time.Time) ([]OutboxRecord, error) {
@@ -79,9 +81,10 @@ func (s *failingProcessorStore) MarkProcessed(outboxID int64, now time.Time) err
 	return nil
 }
 
-func (s *failingProcessorStore) MarkFailed(outboxID int64, lastError string, deadLetter bool, now time.Time) error {
+func (s *failingProcessorStore) MarkFailed(outboxID int64, lastError string, deadLetter bool, nextRetryAt *time.Time, now time.Time) error {
 	s.markFailedCall++
 	s.deadLetter = deadLetter
+	s.nextRetryAt = nextRetryAt
 	return nil
 }
 
@@ -106,7 +109,7 @@ func TestProcessorMarksDeadLetterWhenAttemptsExceeded(t *testing.T) {
 		}},
 	}
 
-	processor := NewProcessor(store, nil, ProcessorConfig{MaxAttempts: 3})
+	processor := NewProcessor(store, nil, ProcessorConfig{MaxAttempts: 3, RetryPolicy: DefaultRetryPolicy()})
 	if err := processor.processBatch(context.Background()); err != nil {
 		t.Fatalf("process batch: %v", err)
 	}
@@ -116,5 +119,36 @@ func TestProcessorMarksDeadLetterWhenAttemptsExceeded(t *testing.T) {
 	}
 	if !store.deadLetter {
 		t.Fatalf("expected dead letter flag to be true when attempts are exceeded")
+	}
+	if store.nextRetryAt != nil {
+		t.Fatalf("expected no retry timestamp once dead lettered")
+	}
+}
+
+func TestProcessorSchedulesRetryWhenAttemptsRemain(t *testing.T) {
+	store := &failingProcessorStore{
+		claimedRows: []OutboxRecord{{
+			ID:      2,
+			EventID: "evt_retry",
+			Attempt: 1,
+		}},
+	}
+
+	processor := NewProcessor(store, nil, ProcessorConfig{MaxAttempts: 3, RetryPolicy: RetryPolicy{BaseDelay: 2 * time.Second, MaxDelay: 10 * time.Second}})
+	if err := processor.processBatch(context.Background()); err != nil {
+		t.Fatalf("process batch: %v", err)
+	}
+
+	if store.markFailedCall != 1 {
+		t.Fatalf("expected mark failed to be called once, got %d", store.markFailedCall)
+	}
+	if store.deadLetter {
+		t.Fatalf("expected retryable failure, not dead letter")
+	}
+	if store.nextRetryAt == nil {
+		t.Fatalf("expected retry timestamp to be scheduled")
+	}
+	if !store.nextRetryAt.After(time.Now().UTC()) {
+		t.Fatalf("expected retry timestamp to be in the future, got %s", store.nextRetryAt.Format(time.RFC3339Nano))
 	}
 }

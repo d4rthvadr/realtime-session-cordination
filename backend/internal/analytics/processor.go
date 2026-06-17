@@ -17,6 +17,7 @@ type ProcessorConfig struct {
 	LeaseDuration time.Duration
 	BatchSize     int
 	MaxAttempts   int
+	RetryPolicy   RetryPolicy
 
 	ProjectionBuilder        *ProjectionBuilder
 	GetSessionSnapshot       func(sessionID string) (session.Snapshot, error)
@@ -46,6 +47,12 @@ func NewProcessor(store ProcessorStore, logger *slog.Logger, cfg ProcessorConfig
 	}
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = 5
+	}
+	if cfg.RetryPolicy.BaseDelay <= 0 {
+		cfg.RetryPolicy = DefaultRetryPolicy()
+	}
+	if cfg.RetryPolicy.MaxDelay <= 0 {
+		cfg.RetryPolicy.MaxDelay = DefaultRetryPolicy().MaxDelay
 	}
 
 	if logger == nil {
@@ -97,17 +104,19 @@ func (p *Processor) processBatch(ctx context.Context) error {
 		default:
 		}
 
+		batchNow := time.Now().UTC()
+
 		event, eventErr := p.store.GetEvent(row.EventID)
 		if eventErr != nil {
-			markErr := p.store.MarkFailed(row.ID, eventErr.Error(), row.Attempt >= p.cfg.MaxAttempts, time.Now().UTC())
+			markErr := p.store.MarkFailed(row.ID, eventErr.Error(), row.Attempt >= p.cfg.MaxAttempts, retryAtForAttempt(row.Attempt, batchNow, p.cfg.RetryPolicy, row.Attempt >= p.cfg.MaxAttempts), batchNow)
 			if markErr != nil {
 				p.logger.Error("analytics_processor_mark_failed_error", "outbox_id", row.ID, "error", markErr)
 			}
 			continue
 		}
 
-		if projectionErr := p.rebuildProjections(event, time.Now().UTC()); projectionErr != nil {
-			markErr := p.store.MarkFailed(row.ID, fmt.Sprintf("projection rebuild failed: %v", projectionErr), row.Attempt >= p.cfg.MaxAttempts, time.Now().UTC())
+		if projectionErr := p.rebuildProjections(event, batchNow); projectionErr != nil {
+			markErr := p.store.MarkFailed(row.ID, fmt.Sprintf("projection rebuild failed: %v", projectionErr), row.Attempt >= p.cfg.MaxAttempts, retryAtForAttempt(row.Attempt, batchNow, p.cfg.RetryPolicy, row.Attempt >= p.cfg.MaxAttempts), batchNow)
 			if markErr != nil {
 				p.logger.Error("analytics_processor_projection_mark_failed_error", "outbox_id", row.ID, "error", markErr)
 			}
@@ -118,9 +127,9 @@ func (p *Processor) processBatch(ctx context.Context) error {
 		if saveErr := p.store.SaveCheckpoint(ProcessorCheckpoint{
 			WorkerName:  p.cfg.WorkerName,
 			LastEventID: event.ID,
-			UpdatedAt:   time.Now().UTC(),
+			UpdatedAt:   batchNow,
 		}); saveErr != nil {
-			markErr := p.store.MarkFailed(row.ID, fmt.Sprintf("checkpoint save failed: %v", saveErr), row.Attempt >= p.cfg.MaxAttempts, time.Now().UTC())
+			markErr := p.store.MarkFailed(row.ID, fmt.Sprintf("checkpoint save failed: %v", saveErr), row.Attempt >= p.cfg.MaxAttempts, retryAtForAttempt(row.Attempt, batchNow, p.cfg.RetryPolicy, row.Attempt >= p.cfg.MaxAttempts), batchNow)
 			if markErr != nil {
 				p.logger.Error("analytics_processor_checkpoint_mark_failed_error", "outbox_id", row.ID, "error", markErr)
 			}
@@ -134,6 +143,14 @@ func (p *Processor) processBatch(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func retryAtForAttempt(attempt int, now time.Time, policy RetryPolicy, deadLetter bool) *time.Time {
+	if deadLetter {
+		return nil
+	}
+	retryAt := NextRetryAt(attempt, now, policy)
+	return &retryAt
 }
 
 func (p *Processor) rebuildProjections(event EventRecord, now time.Time) error {

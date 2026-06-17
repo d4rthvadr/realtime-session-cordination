@@ -29,6 +29,7 @@ type OutboxRecord struct {
 	State       string
 	LeaseOwner  string
 	LeasedUntil *time.Time
+	NextRetryAt *time.Time
 	Attempt     int
 	LastError   string
 	CreatedAt   time.Time
@@ -76,7 +77,7 @@ type ProcessorStore interface {
 	ClaimPendingForProcessing(workerName string, leaseUntil time.Time, limit int, now time.Time) ([]OutboxRecord, error)
 	GetEvent(eventID string) (EventRecord, error)
 	MarkProcessed(outboxID int64, now time.Time) error
-	MarkFailed(outboxID int64, lastError string, deadLetter bool, now time.Time) error
+	MarkFailed(outboxID int64, lastError string, deadLetter bool, nextRetryAt *time.Time, now time.Time) error
 	SaveCheckpoint(checkpoint ProcessorCheckpoint) error
 	LoadCheckpoint(workerName string) (ProcessorCheckpoint, bool, error)
 	GetFreshness(workerName string, now time.Time) (ProcessorFreshness, error)

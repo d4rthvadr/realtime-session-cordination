@@ -70,12 +70,14 @@ func (s *SqliteStore) runMigrations() error {
 			state TEXT NOT NULL CHECK(state IN ('pending', 'processing', 'processed', 'dead_letter')),
 			lease_owner TEXT,
 			leased_until TEXT,
+			next_retry_at TEXT,
 			attempt INTEGER NOT NULL DEFAULT 0,
 			last_error TEXT,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			FOREIGN KEY (event_id) REFERENCES analytics_events(id) ON DELETE CASCADE
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_state_retry ON analytics_outbox(state, next_retry_at, leased_until)`,
 		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_state_lease ON analytics_outbox(state, leased_until)`,
 		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_created ON analytics_outbox(created_at)`,
 		`CREATE TABLE IF NOT EXISTS analytics_checkpoints (
@@ -137,6 +139,27 @@ func (s *SqliteStore) runMigrations() error {
 		if _, err := s.db.Exec(stmt); err != nil {
 			return fmt.Errorf("migration failed: %w", err)
 		}
+	}
+	if err := s.ensureOutboxRetryColumn(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SqliteStore) ensureOutboxRetryColumn() error {
+	var columnCount int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(1)
+		FROM pragma_table_info('analytics_outbox')
+		WHERE name = ?
+	`, "next_retry_at").Scan(&columnCount); err != nil {
+		return fmt.Errorf("failed to inspect analytics_outbox columns: %w", err)
+	}
+	if columnCount > 0 {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE analytics_outbox ADD COLUMN next_retry_at TEXT`); err != nil {
+		return fmt.Errorf("failed to add analytics_outbox.next_retry_at column: %w", err)
 	}
 	return nil
 }
@@ -232,8 +255,8 @@ func (s *SqliteStore) enqueue(exec dbExec, eventID string, now time.Time) error 
 
 	_, err := exec.Exec(`
 		INSERT INTO analytics_outbox (
-			event_id, state, lease_owner, leased_until, attempt, last_error, created_at, updated_at
-		) VALUES (?, ?, NULL, NULL, 0, NULL, ?, ?)
+			event_id, state, lease_owner, leased_until, next_retry_at, attempt, last_error, created_at, updated_at
+		) VALUES (?, ?, NULL, NULL, NULL, 0, NULL, ?, ?)
 	`, eventID, OutboxStatePending, timestamp, timestamp)
 	if err != nil {
 		return fmt.Errorf("failed to enqueue analytics event: %w", err)
@@ -289,13 +312,14 @@ func (s *SqliteStore) ClaimPendingForProcessing(workerName string, leaseUntil ti
 	}
 
 	rows, err := tx.Query(`
-		SELECT id, event_id, state, lease_owner, leased_until, attempt, last_error, created_at, updated_at
+		SELECT id, event_id, state, lease_owner, leased_until, next_retry_at, attempt, last_error, created_at, updated_at
 		FROM analytics_outbox
 		WHERE state = ?
+		  AND (next_retry_at IS NULL OR next_retry_at <= ?)
 		  AND (leased_until IS NULL OR leased_until < ?)
-		ORDER BY created_at ASC
+		ORDER BY COALESCE(next_retry_at, created_at) ASC, created_at ASC
 		LIMIT ?
-	`, OutboxStatePending, now.UTC().Format(time.RFC3339Nano), limit)
+	`, OutboxStatePending, now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), limit)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("failed to query pending outbox rows: %w", err)
@@ -309,9 +333,9 @@ func (s *SqliteStore) ClaimPendingForProcessing(workerName string, leaseUntil ti
 	candidates := make([]candidate, 0, limit)
 	for rows.Next() {
 		var rec OutboxRecord
-		var leaseOwnerRaw, leasedUntilRaw, lastErrorRaw sql.NullString
+		var leaseOwnerRaw, leasedUntilRaw, nextRetryAtRaw, lastErrorRaw sql.NullString
 		var createdAtRaw, updatedAtRaw string
-		if err = rows.Scan(&rec.ID, &rec.EventID, &rec.State, &leaseOwnerRaw, &leasedUntilRaw, &rec.Attempt, &lastErrorRaw, &createdAtRaw, &updatedAtRaw); err != nil {
+		if err = rows.Scan(&rec.ID, &rec.EventID, &rec.State, &leaseOwnerRaw, &leasedUntilRaw, &nextRetryAtRaw, &rec.Attempt, &lastErrorRaw, &createdAtRaw, &updatedAtRaw); err != nil {
 			_ = tx.Rollback()
 			return nil, fmt.Errorf("failed to scan pending outbox row: %w", err)
 		}
@@ -320,6 +344,14 @@ func (s *SqliteStore) ClaimPendingForProcessing(workerName string, leaseUntil ti
 		}
 		if lastErrorRaw.Valid {
 			rec.LastError = lastErrorRaw.String
+		}
+		if nextRetryAtRaw.Valid {
+			ts, parseErr := time.Parse(time.RFC3339Nano, nextRetryAtRaw.String)
+			if parseErr != nil {
+				_ = tx.Rollback()
+				return nil, fmt.Errorf("failed to parse next_retry_at for pending outbox row: %w", parseErr)
+			}
+			rec.NextRetryAt = &ts
 		}
 		createdAt, parseErr := time.Parse(time.RFC3339Nano, createdAtRaw)
 		if parseErr != nil {
@@ -359,12 +391,12 @@ func (s *SqliteStore) ClaimPendingForProcessing(workerName string, leaseUntil ti
 		}
 
 		var rec OutboxRecord
-		var leaseOwnerRaw, leasedUntilRaw, lastErrorRaw sql.NullString
+		var leaseOwnerRaw, leasedUntilRaw, nextRetryAtRaw, lastErrorRaw sql.NullString
 		var createdAtRaw, updatedAtRaw string
 		if err = tx.QueryRow(`
-			SELECT id, event_id, state, lease_owner, leased_until, attempt, last_error, created_at, updated_at
+			SELECT id, event_id, state, lease_owner, leased_until, next_retry_at, attempt, last_error, created_at, updated_at
 			FROM analytics_outbox WHERE id = ?
-		`, c.id).Scan(&rec.ID, &rec.EventID, &rec.State, &leaseOwnerRaw, &leasedUntilRaw, &rec.Attempt, &lastErrorRaw, &createdAtRaw, &updatedAtRaw); err != nil {
+		`, c.id).Scan(&rec.ID, &rec.EventID, &rec.State, &leaseOwnerRaw, &leasedUntilRaw, &nextRetryAtRaw, &rec.Attempt, &lastErrorRaw, &createdAtRaw, &updatedAtRaw); err != nil {
 			_ = tx.Rollback()
 			return nil, fmt.Errorf("failed to read claimed outbox row %d: %w", c.id, err)
 		}
@@ -373,6 +405,14 @@ func (s *SqliteStore) ClaimPendingForProcessing(workerName string, leaseUntil ti
 		}
 		if lastErrorRaw.Valid {
 			rec.LastError = lastErrorRaw.String
+		}
+		if nextRetryAtRaw.Valid {
+			ts, parseErr := time.Parse(time.RFC3339Nano, nextRetryAtRaw.String)
+			if parseErr != nil {
+				_ = tx.Rollback()
+				return nil, fmt.Errorf("failed to parse next_retry_at for outbox row %d: %w", c.id, parseErr)
+			}
+			rec.NextRetryAt = &ts
 		}
 		createdAt, parseErr := time.Parse(time.RFC3339Nano, createdAtRaw)
 		if parseErr != nil {
@@ -452,7 +492,7 @@ func (s *SqliteStore) MarkProcessed(outboxID int64, now time.Time) error {
 
 	_, err := s.db.Exec(`
 		UPDATE analytics_outbox
-		SET state = ?, lease_owner = NULL, leased_until = NULL, last_error = NULL, updated_at = ?
+		SET state = ?, lease_owner = NULL, leased_until = NULL, next_retry_at = NULL, last_error = NULL, updated_at = ?
 		WHERE id = ?
 	`, OutboxStateProcessed, now.UTC().Format(time.RFC3339Nano), outboxID)
 	if err != nil {
@@ -462,7 +502,7 @@ func (s *SqliteStore) MarkProcessed(outboxID int64, now time.Time) error {
 	return nil
 }
 
-func (s *SqliteStore) MarkFailed(outboxID int64, lastError string, deadLetter bool, now time.Time) error {
+func (s *SqliteStore) MarkFailed(outboxID int64, lastError string, deadLetter bool, nextRetryAt *time.Time, now time.Time) error {
 	if outboxID <= 0 {
 		return fmt.Errorf("outbox id is required")
 	}
@@ -471,15 +511,18 @@ func (s *SqliteStore) MarkFailed(outboxID int64, lastError string, deadLetter bo
 	}
 
 	nextState := OutboxStatePending
+	var retryAtValue any = nil
 	if deadLetter {
 		nextState = OutboxStateDeadLetter
+	} else if nextRetryAt != nil {
+		retryAtValue = nextRetryAt.UTC().Format(time.RFC3339Nano)
 	}
 
 	_, err := s.db.Exec(`
 		UPDATE analytics_outbox
-		SET state = ?, lease_owner = NULL, leased_until = NULL, last_error = ?, updated_at = ?
+		SET state = ?, lease_owner = NULL, leased_until = NULL, next_retry_at = ?, last_error = ?, updated_at = ?
 		WHERE id = ?
-	`, nextState, lastError, now.UTC().Format(time.RFC3339Nano), outboxID)
+	`, nextState, retryAtValue, lastError, now.UTC().Format(time.RFC3339Nano), outboxID)
 	if err != nil {
 		return fmt.Errorf("failed to mark outbox row failed: %w", err)
 	}
