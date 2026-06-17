@@ -24,10 +24,22 @@ type ProcessorConfig struct {
 	DeadLetterRetention      time.Duration
 	EventRetention           time.Duration
 
-	ProjectionBuilder        *ProjectionBuilder
+	ProjectionBuilder        projectionRebuilder
 	GetSessionSnapshot       func(sessionID string) (session.Snapshot, error)
 	ListProgramItemSnapshots func(sessionID string) ([]programitem.Snapshot, error)
 	ListSessionSnapshots     func() ([]session.Snapshot, error)
+}
+
+type projectionRebuilder interface {
+	RebuildSessionProjection(sessionID string, sessionSnap session.Snapshot, items []programitem.Snapshot, now time.Time) error
+	RebuildPlatformProjection(sessions []session.Snapshot, itemsBySession map[string][]programitem.Snapshot, now time.Time) error
+}
+
+type projectionBatchCache struct {
+	sessionSnapshots map[string]session.Snapshot
+	programItems     map[string][]programitem.Snapshot
+	allSessions      []session.Snapshot
+	hasAllSessions   bool
 }
 
 // Processor consumes outbox records and advances processing checkpoints.
@@ -141,6 +153,11 @@ func (p *Processor) processBatch(ctx context.Context) error {
 		return nil
 	}
 
+	cache := &projectionBatchCache{
+		sessionSnapshots: make(map[string]session.Snapshot),
+		programItems:     make(map[string][]programitem.Snapshot),
+	}
+
 	for _, row := range rows {
 		select {
 		case <-ctx.Done():
@@ -163,7 +180,7 @@ func (p *Processor) processBatch(ctx context.Context) error {
 			continue
 		}
 
-		if projectionErr := p.rebuildProjections(event, batchNow); projectionErr != nil {
+		if projectionErr := p.rebuildProjections(event, batchNow, cache); projectionErr != nil {
 			atomic.AddInt64(&p.failedCount, 1)
 			atomic.AddInt64(&p.projectionErrorCount, 1)
 			if row.Attempt >= p.cfg.MaxAttempts {
@@ -276,7 +293,7 @@ func retryAtForAttempt(attempt int, now time.Time, policy RetryPolicy, deadLette
 	return &retryAt
 }
 
-func (p *Processor) rebuildProjections(event EventRecord, now time.Time) error {
+func (p *Processor) rebuildProjections(event EventRecord, now time.Time, cache *projectionBatchCache) error {
 	if p.cfg.ProjectionBuilder == nil {
 		return nil
 	}
@@ -289,12 +306,18 @@ func (p *Processor) rebuildProjections(event EventRecord, now time.Time) error {
 	if p.cfg.ListSessionSnapshots == nil {
 		return fmt.Errorf("session list provider is required")
 	}
+	if cache == nil {
+		cache = &projectionBatchCache{
+			sessionSnapshots: make(map[string]session.Snapshot),
+			programItems:     make(map[string][]programitem.Snapshot),
+		}
+	}
 
-	sessionSnap, err := p.cfg.GetSessionSnapshot(event.SessionID)
+	sessionSnap, err := p.getSessionSnapshotCached(event.SessionID, cache)
 	if err != nil {
 		return fmt.Errorf("load session snapshot: %w", err)
 	}
-	items, err := p.cfg.ListProgramItemSnapshots(event.SessionID)
+	items, err := p.getProgramItemsCached(event.SessionID, cache)
 	if err != nil {
 		return fmt.Errorf("load session program items: %w", err)
 	}
@@ -302,18 +325,17 @@ func (p *Processor) rebuildProjections(event EventRecord, now time.Time) error {
 		return fmt.Errorf("rebuild session projection: %w", err)
 	}
 
-	sessions, err := p.cfg.ListSessionSnapshots()
+	if !shouldRebuildPlatformForEvent(event.EventKey) {
+		return nil
+	}
+
+	sessions, err := p.getAllSessionsCached(cache)
 	if err != nil {
 		return fmt.Errorf("load sessions: %w", err)
 	}
 	itemsBySession := make(map[string][]programitem.Snapshot, len(sessions))
 	for _, s := range sessions {
-		if s.ID == event.SessionID {
-			itemsBySession[s.ID] = items
-			continue
-		}
-
-		sessionItems, listErr := p.cfg.ListProgramItemSnapshots(s.ID)
+		sessionItems, listErr := p.getProgramItemsCached(s.ID, cache)
 		if listErr != nil {
 			return fmt.Errorf("load session program items for %s: %w", s.ID, listErr)
 		}
@@ -325,4 +347,51 @@ func (p *Processor) rebuildProjections(event EventRecord, now time.Time) error {
 	}
 
 	return nil
+}
+
+func (p *Processor) getSessionSnapshotCached(sessionID string, cache *projectionBatchCache) (session.Snapshot, error) {
+	if snap, ok := cache.sessionSnapshots[sessionID]; ok {
+		return snap, nil
+	}
+	snap, err := p.cfg.GetSessionSnapshot(sessionID)
+	if err != nil {
+		return session.Snapshot{}, err
+	}
+	cache.sessionSnapshots[sessionID] = snap
+	return snap, nil
+}
+
+func (p *Processor) getProgramItemsCached(sessionID string, cache *projectionBatchCache) ([]programitem.Snapshot, error) {
+	if items, ok := cache.programItems[sessionID]; ok {
+		return items, nil
+	}
+	items, err := p.cfg.ListProgramItemSnapshots(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	cache.programItems[sessionID] = items
+	return items, nil
+}
+
+func (p *Processor) getAllSessionsCached(cache *projectionBatchCache) ([]session.Snapshot, error) {
+	if cache.hasAllSessions {
+		return cache.allSessions, nil
+	}
+	sessions, err := p.cfg.ListSessionSnapshots()
+	if err != nil {
+		return nil, err
+	}
+	cache.allSessions = sessions
+	cache.hasAllSessions = true
+	return sessions, nil
+}
+
+func shouldRebuildPlatformForEvent(eventKey string) bool {
+	switch eventKey {
+	case "SESSION_CREATED", "SESSION_STARTED", "SESSION_PAUSED", "SESSION_RESUMED", "SESSION_ENDED", "SESSION_TIME_ADJUSTED",
+		"PROGRAM_ITEM_CREATED", "PROGRAM_ITEM_UPDATED", "PROGRAM_ITEM_CANCELED", "PROGRAM_ITEM_STARTED", "PROGRAM_ITEM_PAUSED", "PROGRAM_ITEM_RESUMED", "PROGRAM_ITEM_ENDED", "PROGRAM_ITEM_TIME_ADJUSTED":
+		return true
+	default:
+		return false
+	}
 }
