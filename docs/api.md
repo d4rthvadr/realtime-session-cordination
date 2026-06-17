@@ -117,6 +117,10 @@ See detailed formulas in docs/programitem-time-calculation.md.
 - GET /api/v1/sessions/:id/logs returns paginated session log entries (auth required).
 - GET /api/v1/sessions/:id/analytics returns per-session analytics summary (auth required).
 - GET /api/v1/analytics/overview returns cross-session analytics overview (auth required).
+- GET /api/v1/analytics/ops/status returns analytics processor freshness + runtime metrics (auth required).
+- GET /api/v1/analytics/dlq returns dead-letter outbox rows (auth required).
+- GET /api/v1/analytics/dlq/:outboxId returns one dead-letter outbox row (auth required).
+- POST /api/v1/analytics/dlq/:outboxId/retry requeues a dead-letter row to pending (auth required).
 - POST /api/v1/sessions/:id/start returns unified runtime envelope.
 - POST /api/v1/sessions/:id/pause returns unified runtime envelope.
 - POST /api/v1/sessions/:id/resume returns unified runtime envelope.
@@ -211,7 +215,10 @@ Response shape:
     "lastEventId": "evt_abc123",
     "lastProcessedAt": "2026-06-15T12:00:00Z",
     "pendingCount": 0,
-    "oldestPendingAt": null
+    "oldestPendingAt": null,
+    "retryDueCount": 0,
+    "deadLetterCount": 0,
+    "retryLagSeconds": 0
   }
 }
 ```
@@ -258,7 +265,10 @@ Response shape:
     "lastEventId": "evt_abc123",
     "lastProcessedAt": "2026-06-15T12:00:00Z",
     "pendingCount": 0,
-    "oldestPendingAt": null
+    "oldestPendingAt": null,
+    "retryDueCount": 0,
+    "deadLetterCount": 0,
+    "retryLagSeconds": 0
   }
 }
 ```
@@ -271,10 +281,111 @@ Notes:
   - `lastProcessedAt`
   - `pendingCount`
   - `oldestPendingAt`
+  - `retryDueCount`
+  - `deadLetterCount`
+  - `retryLagSeconds`
 - `freshness` is optional and omitted when lookup fails.
 - Handler behavior is projection-first with fallback:
   - attempts to read `analytics_platform_projection` via projection store
   - falls back to on-demand `BuildPlatformOverview` when projection is unavailable
+
+Analytics operations status:
+
+`GET /api/v1/analytics/ops/status`
+
+Response shape:
+
+```json
+{
+  "freshness": {
+    "workerName": "analytics_processor",
+    "lastEventId": "evt_abc123",
+    "lastProcessedAt": "2026-06-15T12:00:00Z",
+    "pendingCount": 2,
+    "oldestPendingAt": "2026-06-15T11:59:12Z",
+    "retryDueCount": 1,
+    "deadLetterCount": 3,
+    "retryLagSeconds": 48
+  },
+  "metrics": {
+    "processedCount": 1200,
+    "failedCount": 14,
+    "deadLetterCount": 3,
+    "projectionErrorCount": 9,
+    "checkpointErrorCount": 2,
+    "lastBatchDurationMillis": 37,
+    "lastBatchAt": "2026-06-15T12:00:00Z"
+  }
+}
+```
+
+Notes:
+
+- `metrics` is present when the configured analytics processor store exposes runtime metrics.
+
+Analytics dead-letter queue (DLQ):
+
+`GET /api/v1/analytics/dlq?limit=<n>&offset=<n>`
+
+Response shape:
+
+```json
+{
+  "rows": [
+    {
+      "OutboxID": 42,
+      "EventID": "evt_abc123",
+      "SessionID": "sess_abc123",
+      "ProgramItemID": "pi_123",
+      "EventKey": "PROGRAM_ITEM_PAUSED",
+      "OccurredAt": "2026-06-15T11:58:00Z",
+      "IngestedAt": "2026-06-15T11:58:00Z",
+      "Attempt": 5,
+      "LastError": "projection rebuild failed: ...",
+      "FailedAt": "2026-06-15T11:59:00Z",
+      "PayloadJSON": "eyJ0eXBlIjoiUFJPR1JBTV9JVEVNX1BBVVNFRCJ9"
+    }
+  ],
+  "count": 1
+}
+```
+
+`GET /api/v1/analytics/dlq/:outboxId`
+
+Response shape:
+
+```json
+{
+  "row": {
+    "OutboxID": 42,
+    "EventID": "evt_abc123",
+    "SessionID": "sess_abc123",
+    "ProgramItemID": "pi_123",
+    "EventKey": "PROGRAM_ITEM_PAUSED",
+    "OccurredAt": "2026-06-15T11:58:00Z",
+    "IngestedAt": "2026-06-15T11:58:00Z",
+    "Attempt": 5,
+    "LastError": "projection rebuild failed: ...",
+    "FailedAt": "2026-06-15T11:59:00Z",
+    "PayloadJSON": "eyJ0eXBlIjoiUFJPR1JBTV9JVEVNX1BBVVNFRCJ9"
+  }
+}
+```
+
+Notes:
+
+- DLQ row objects currently serialize with exported Go field names (for example `OutboxID`, `EventID`).
+
+`POST /api/v1/analytics/dlq/:outboxId/retry`
+
+Response shape:
+
+```json
+{
+  "status": "queued",
+  "outboxId": 42
+}
+```
 
 ### Session Log Taxonomy (Phase 1A)
 
