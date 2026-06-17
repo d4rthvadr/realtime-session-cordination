@@ -104,6 +104,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		protected.POST("/sessions", h.createSession)
 		protected.GET("/sessions", h.listSessions)
 		protected.GET("/analytics/overview", h.getAnalyticsOverview)
+		protected.GET("/analytics/ops/status", h.getAnalyticsOpsStatus)
 		protected.GET("/analytics/dlq", h.listAnalyticsDeadLetters)
 		protected.GET("/analytics/dlq/:outboxId", h.getAnalyticsDeadLetter)
 		protected.POST("/analytics/dlq/:outboxId/retry", h.retryAnalyticsDeadLetter)
@@ -268,6 +269,7 @@ func (h *Handler) listSessionLogs(c *gin.Context) {
 func (h *Handler) getSessionAnalytics(c *gin.Context) {
 	sessionID := c.Param("id")
 	now := time.Now().UTC()
+	// TODO(analytics-cache): Cache session analytics + freshness by session ID (short TTL) using in-memory cache or Redis.
 
 	var (
 		summary         analytics.SessionSummary
@@ -325,6 +327,7 @@ func (h *Handler) getSessionAnalytics(c *gin.Context) {
 
 func (h *Handler) getAnalyticsOverview(c *gin.Context) {
 	now := time.Now().UTC()
+	// TODO(analytics-cache): Cache platform overview + freshness (short TTL) in-memory or Redis to reduce repeated aggregation reads.
 
 	var (
 		overview         analytics.PlatformOverview
@@ -479,6 +482,32 @@ func (h *Handler) retryAnalyticsDeadLetter(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "queued", "outboxId": outboxID})
+}
+
+func (h *Handler) getAnalyticsOpsStatus(c *gin.Context) {
+	if h.analyticsProcessorStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics processor store not configured"})
+		return
+	}
+
+	// TODO(analytics-cache): Cache ops status payload (freshness + metrics) with very short TTL using in-memory cache or Redis.
+	now := time.Now().UTC()
+	freshness, err := h.analyticsProcessorStore.GetFreshness("analytics_processor", now)
+	if err != nil {
+		h.logger.Error("analytics_ops_freshness_load_failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load analytics freshness"})
+		return
+	}
+
+	var metrics analytics.ProcessorMetrics
+	if metricsStore, ok := h.analyticsProcessorStore.(analytics.ProcessorMetricsStore); ok {
+		metrics = metricsStore.GetProcessorMetrics()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"freshness": freshness,
+		"metrics":   metrics,
+	})
 }
 
 func sessionSummaryFromProjection(p analytics.SessionProjection) analytics.SessionSummary {

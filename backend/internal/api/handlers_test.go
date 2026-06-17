@@ -23,6 +23,7 @@ type testIngestionStore struct {
 
 type testAnalyticsProjectionProcessorStore struct {
 	freshness               analytics.ProcessorFreshness
+	metrics                 analytics.ProcessorMetrics
 	sessionProjection       analytics.SessionProjection
 	sessionProjectionFound  bool
 	platformProjection      analytics.PlatformProjection
@@ -98,6 +99,10 @@ func (s *testAnalyticsProjectionProcessorStore) RetryDeadLetter(outboxID int64, 
 		delete(s.deadLetters, outboxID)
 	}
 	return nil
+}
+
+func (s *testAnalyticsProjectionProcessorStore) GetProcessorMetrics() analytics.ProcessorMetrics {
+	return s.metrics
 }
 
 func (s *testIngestionStore) AppendEventAndEnqueue(record analytics.EventRecord, now time.Time) error {
@@ -451,6 +456,52 @@ func TestRetryAnalyticsDeadLetterQueuesRow(t *testing.T) {
 	store := handler.analyticsProcessorStore.(*testAnalyticsProjectionProcessorStore)
 	if _, exists := store.deadLetters[41]; exists {
 		t.Fatalf("expected dead-letter row to be removed after retry")
+	}
+}
+
+func TestGetAnalyticsOpsStatusReturnsFreshnessAndMetrics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	handler, _, _, _, _ := newTestHandler(t)
+	handler.analyticsProcessorStore = &testAnalyticsProjectionProcessorStore{
+		freshness: analytics.ProcessorFreshness{
+			WorkerName:      "analytics_processor",
+			PendingCount:    3,
+			RetryDueCount:   2,
+			DeadLetterCount: 1,
+			RetryLagSeconds: 17,
+			LastEventID:     "evt_ops",
+			LastProcessedAt: &now,
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/analytics/ops/status", nil)
+
+	handler.getAnalyticsOpsStatus(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Freshness analytics.ProcessorFreshness `json:"freshness"`
+		Metrics   analytics.ProcessorMetrics   `json:"metrics"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if payload.Freshness.RetryDueCount != 2 {
+		t.Fatalf("expected retryDueCount=2, got %d", payload.Freshness.RetryDueCount)
+	}
+	if payload.Freshness.DeadLetterCount != 1 {
+		t.Fatalf("expected deadLetterCount=1, got %d", payload.Freshness.DeadLetterCount)
+	}
+	if payload.Freshness.RetryLagSeconds != 17 {
+		t.Fatalf("expected retryLagSeconds=17, got %d", payload.Freshness.RetryLagSeconds)
 	}
 }
 

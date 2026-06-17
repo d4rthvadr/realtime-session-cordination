@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"realtime-session-coordination/backend/internal/programitem"
@@ -36,6 +37,14 @@ type Processor struct {
 	cfg           ProcessorConfig
 	lastCleanupAt time.Time
 	nowFn         func() time.Time
+
+	processedCount       int64
+	failedCount          int64
+	deadLetterCount      int64
+	projectionErrorCount int64
+	checkpointErrorCount int64
+	lastBatchAtUnix      int64
+	lastBatchDurationMs  int64
 }
 
 func NewProcessor(store ProcessorStore, logger *slog.Logger, cfg ProcessorConfig) *Processor {
@@ -114,6 +123,13 @@ func (p *Processor) Start(ctx context.Context) {
 }
 
 func (p *Processor) processBatch(ctx context.Context) error {
+	batchStart := p.nowUTC()
+	defer func() {
+		now := p.nowUTC()
+		atomic.StoreInt64(&p.lastBatchAtUnix, now.Unix())
+		atomic.StoreInt64(&p.lastBatchDurationMs, now.Sub(batchStart).Milliseconds())
+	}()
+
 	now := p.nowUTC()
 	leaseUntil := now.Add(p.cfg.LeaseDuration)
 
@@ -136,6 +152,10 @@ func (p *Processor) processBatch(ctx context.Context) error {
 
 		event, eventErr := p.store.GetEvent(row.EventID)
 		if eventErr != nil {
+			atomic.AddInt64(&p.failedCount, 1)
+			if row.Attempt >= p.cfg.MaxAttempts {
+				atomic.AddInt64(&p.deadLetterCount, 1)
+			}
 			markErr := p.store.MarkFailed(row.ID, eventErr.Error(), row.Attempt >= p.cfg.MaxAttempts, retryAtForAttempt(row.Attempt, batchNow, p.cfg.RetryPolicy, row.Attempt >= p.cfg.MaxAttempts), batchNow)
 			if markErr != nil {
 				p.logger.Error("analytics_processor_mark_failed_error", "outbox_id", row.ID, "error", markErr)
@@ -144,6 +164,11 @@ func (p *Processor) processBatch(ctx context.Context) error {
 		}
 
 		if projectionErr := p.rebuildProjections(event, batchNow); projectionErr != nil {
+			atomic.AddInt64(&p.failedCount, 1)
+			atomic.AddInt64(&p.projectionErrorCount, 1)
+			if row.Attempt >= p.cfg.MaxAttempts {
+				atomic.AddInt64(&p.deadLetterCount, 1)
+			}
 			markErr := p.store.MarkFailed(row.ID, fmt.Sprintf("projection rebuild failed: %v", projectionErr), row.Attempt >= p.cfg.MaxAttempts, retryAtForAttempt(row.Attempt, batchNow, p.cfg.RetryPolicy, row.Attempt >= p.cfg.MaxAttempts), batchNow)
 			if markErr != nil {
 				p.logger.Error("analytics_processor_projection_mark_failed_error", "outbox_id", row.ID, "error", markErr)
@@ -157,6 +182,11 @@ func (p *Processor) processBatch(ctx context.Context) error {
 			LastEventID: event.ID,
 			UpdatedAt:   batchNow,
 		}); saveErr != nil {
+			atomic.AddInt64(&p.failedCount, 1)
+			atomic.AddInt64(&p.checkpointErrorCount, 1)
+			if row.Attempt >= p.cfg.MaxAttempts {
+				atomic.AddInt64(&p.deadLetterCount, 1)
+			}
 			markErr := p.store.MarkFailed(row.ID, fmt.Sprintf("checkpoint save failed: %v", saveErr), row.Attempt >= p.cfg.MaxAttempts, retryAtForAttempt(row.Attempt, batchNow, p.cfg.RetryPolicy, row.Attempt >= p.cfg.MaxAttempts), batchNow)
 			if markErr != nil {
 				p.logger.Error("analytics_processor_checkpoint_mark_failed_error", "outbox_id", row.ID, "error", markErr)
@@ -168,9 +198,27 @@ func (p *Processor) processBatch(ctx context.Context) error {
 			p.logger.Error("analytics_processor_mark_processed_error", "outbox_id", row.ID, "error", markErr)
 			continue
 		}
+		atomic.AddInt64(&p.processedCount, 1)
 	}
 
 	return nil
+}
+
+func (p *Processor) GetProcessorMetrics() ProcessorMetrics {
+	metrics := ProcessorMetrics{
+		ProcessedCount:          atomic.LoadInt64(&p.processedCount),
+		FailedCount:             atomic.LoadInt64(&p.failedCount),
+		DeadLetterCount:         atomic.LoadInt64(&p.deadLetterCount),
+		ProjectionErrorCount:    atomic.LoadInt64(&p.projectionErrorCount),
+		CheckpointErrorCount:    atomic.LoadInt64(&p.checkpointErrorCount),
+		LastBatchDurationMillis: atomic.LoadInt64(&p.lastBatchDurationMs),
+	}
+	lastAt := atomic.LoadInt64(&p.lastBatchAtUnix)
+	if lastAt > 0 {
+		t := time.Unix(lastAt, 0).UTC()
+		metrics.LastBatchAt = &t
+	}
+	return metrics
 }
 
 func (p *Processor) nowUTC() time.Time {

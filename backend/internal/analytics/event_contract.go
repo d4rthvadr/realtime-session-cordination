@@ -50,6 +50,25 @@ type ProcessorFreshness struct {
 	LastProcessedAt *time.Time `json:"lastProcessedAt,omitempty"`
 	PendingCount    int        `json:"pendingCount"`
 	OldestPendingAt *time.Time `json:"oldestPendingAt,omitempty"`
+	RetryDueCount   int        `json:"retryDueCount"`
+	DeadLetterCount int        `json:"deadLetterCount"`
+	RetryLagSeconds int        `json:"retryLagSeconds"`
+}
+
+// ProcessorMetrics captures processor execution counters and recent timings.
+type ProcessorMetrics struct {
+	ProcessedCount          int64      `json:"processedCount"`
+	FailedCount             int64      `json:"failedCount"`
+	DeadLetterCount         int64      `json:"deadLetterCount"`
+	ProjectionErrorCount    int64      `json:"projectionErrorCount"`
+	CheckpointErrorCount    int64      `json:"checkpointErrorCount"`
+	LastBatchDurationMillis int64      `json:"lastBatchDurationMillis"`
+	LastBatchAt             *time.Time `json:"lastBatchAt,omitempty"`
+}
+
+// ProcessorMetricsStore allows API handlers to read processor runtime metrics.
+type ProcessorMetricsStore interface {
+	GetProcessorMetrics() ProcessorMetrics
 }
 
 // DeadLetterRecord represents a failed outbox row parked in dead-letter state.

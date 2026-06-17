@@ -564,6 +564,7 @@ func (s *SqliteStore) GetFreshness(workerName string, now time.Time) (ProcessorF
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	// TODO(analytics-cache): Add short-lived freshness cache (in-memory or Redis) to avoid running multiple count queries on every request.
 
 	freshness := ProcessorFreshness{WorkerName: workerName}
 
@@ -593,6 +594,28 @@ func (s *SqliteStore) GetFreshness(workerName string, now time.Time) (ProcessorF
 			return ProcessorFreshness{}, fmt.Errorf("failed to parse oldest pending timestamp: %w", parseErr)
 		}
 		freshness.OldestPendingAt = &ts
+		lag := int(now.UTC().Sub(ts).Seconds())
+		if lag > 0 {
+			freshness.RetryLagSeconds = lag
+		}
+	}
+
+	if err = s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM analytics_outbox
+		WHERE state = ?
+		  AND next_retry_at IS NOT NULL
+		  AND next_retry_at <= ?
+	`, OutboxStatePending, now.UTC().Format(time.RFC3339Nano)).Scan(&freshness.RetryDueCount); err != nil {
+		return ProcessorFreshness{}, fmt.Errorf("failed to compute retry due count: %w", err)
+	}
+
+	if err = s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM analytics_outbox
+		WHERE state = ?
+	`, OutboxStateDeadLetter).Scan(&freshness.DeadLetterCount); err != nil {
+		return ProcessorFreshness{}, fmt.Errorf("failed to compute dead-letter count: %w", err)
 	}
 
 	return freshness, nil

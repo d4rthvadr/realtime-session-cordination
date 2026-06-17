@@ -310,3 +310,74 @@ func TestSqliteStoreCleanupRetentionMethods(t *testing.T) {
 		t.Fatalf("expected orphan old event to be deleted")
 	}
 }
+
+func TestSqliteStoreGetFreshnessIncludesOperationalMetadata(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "analytics-test-freshness-metadata.db")
+
+	store, err := NewSqliteStore(dbPath)
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+
+	now := time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC)
+	retryEventID := "evt_retry_due"
+	deadEventID := "evt_dead"
+
+	err = store.AppendEventAndEnqueue(EventRecord{
+		ID:          retryEventID,
+		SessionID:   "sess_ops",
+		EventKey:    "SESSION_PAUSED",
+		OccurredAt:  now.Add(-2 * time.Minute),
+		IngestedAt:  now.Add(-2 * time.Minute),
+		Source:      EventSourceServer,
+		PayloadJSON: []byte(`{"type":"SESSION_PAUSED"}`),
+	}, now.Add(-2*time.Minute))
+	if err != nil {
+		t.Fatalf("append retry event: %v", err)
+	}
+
+	var retryOutboxID int64
+	if err = store.db.QueryRow(`SELECT id FROM analytics_outbox WHERE event_id = ?`, retryEventID).Scan(&retryOutboxID); err != nil {
+		t.Fatalf("read retry outbox id: %v", err)
+	}
+	retryAt := now.Add(-30 * time.Second)
+	if err = store.MarkFailed(retryOutboxID, "retry me", false, &retryAt, now.Add(-1*time.Minute)); err != nil {
+		t.Fatalf("mark retry event failed: %v", err)
+	}
+
+	err = store.AppendEventAndEnqueue(EventRecord{
+		ID:          deadEventID,
+		SessionID:   "sess_ops",
+		EventKey:    "SESSION_ENDED",
+		OccurredAt:  now.Add(-3 * time.Minute),
+		IngestedAt:  now.Add(-3 * time.Minute),
+		Source:      EventSourceServer,
+		PayloadJSON: []byte(`{"type":"SESSION_ENDED"}`),
+	}, now.Add(-3*time.Minute))
+	if err != nil {
+		t.Fatalf("append dead event: %v", err)
+	}
+
+	var deadOutboxID int64
+	if err = store.db.QueryRow(`SELECT id FROM analytics_outbox WHERE event_id = ?`, deadEventID).Scan(&deadOutboxID); err != nil {
+		t.Fatalf("read dead outbox id: %v", err)
+	}
+	if err = store.MarkFailed(deadOutboxID, "dead letter", true, nil, now.Add(-2*time.Minute)); err != nil {
+		t.Fatalf("mark dead event failed: %v", err)
+	}
+
+	freshness, err := store.GetFreshness("analytics_processor", now)
+	if err != nil {
+		t.Fatalf("get freshness: %v", err)
+	}
+
+	if freshness.RetryDueCount != 1 {
+		t.Fatalf("expected retry due count 1, got %d", freshness.RetryDueCount)
+	}
+	if freshness.DeadLetterCount != 1 {
+		t.Fatalf("expected dead-letter count 1, got %d", freshness.DeadLetterCount)
+	}
+	if freshness.RetryLagSeconds <= 0 {
+		t.Fatalf("expected retry lag to be positive, got %d", freshness.RetryLagSeconds)
+	}
+}
