@@ -73,17 +73,17 @@ type ProcessorMetricsStore interface {
 
 // DeadLetterRecord represents a failed outbox row parked in dead-letter state.
 type DeadLetterRecord struct {
-	OutboxID       int64
-	EventID        string
-	SessionID      string
-	ProgramItemID  *string
-	EventKey       string
-	OccurredAt     time.Time
-	IngestedAt     time.Time
-	Attempt        int
-	LastError      string
-	FailedAt       time.Time
-	PayloadJSON    []byte
+	OutboxID      int64     `json:"outboxId"`
+	EventID       string    `json:"eventId"`
+	SessionID     string    `json:"sessionId"`
+	ProgramItemID *string   `json:"programItemId,omitempty"`
+	EventKey      string    `json:"eventKey"`
+	OccurredAt    time.Time `json:"occurredAt"`
+	IngestedAt    time.Time `json:"ingestedAt"`
+	Attempt       int       `json:"attempt"`
+	LastError     string    `json:"lastError"`
+	FailedAt      time.Time `json:"failedAt"`
+	PayloadJSON   []byte    `json:"payloadJson,omitempty"`
 }
 
 // EventStore persists raw analytics events.
