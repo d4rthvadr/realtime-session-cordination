@@ -122,3 +122,91 @@ func TestSqliteStoreClaimHonorsNextRetryAt(t *testing.T) {
 		t.Fatalf("expected claim attempt to increment to 1, got %d", rows[0].Attempt)
 	}
 }
+
+func TestSqliteStoreDeadLetterListGetAndRetry(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "analytics-test-dlq.db")
+
+	store, err := NewSqliteStore(dbPath)
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+
+	now := time.Date(2026, 6, 3, 15, 0, 0, 0, time.UTC)
+	eventID := "evt_dlq_1"
+
+	err = store.AppendEventAndEnqueue(EventRecord{
+		ID:          eventID,
+		SessionID:   "sess_dlq",
+		EventKey:    "PROGRAM_ITEM_ENDED",
+		OccurredAt:  now,
+		IngestedAt:  now,
+		Source:      EventSourceServer,
+		PayloadJSON: []byte(`{"type":"PROGRAM_ITEM_ENDED"}`),
+	}, now)
+	if err != nil {
+		t.Fatalf("append+enqueue: %v", err)
+	}
+
+	claimed, err := store.ClaimPendingForProcessing("analytics_processor", now.Add(15*time.Second), 10, now)
+	if err != nil {
+		t.Fatalf("claim pending: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("expected one claimed row, got %d", len(claimed))
+	}
+	outboxID := claimed[0].ID
+
+	err = store.MarkFailed(outboxID, "projection rebuild failed", true, nil, now.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("mark failed dead-letter: %v", err)
+	}
+
+	rows, err := store.ListDeadLetters(20, 0)
+	if err != nil {
+		t.Fatalf("list dead letters: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one dead-letter row, got %d", len(rows))
+	}
+	if rows[0].OutboxID != outboxID {
+		t.Fatalf("expected dead-letter outbox id %d, got %d", outboxID, rows[0].OutboxID)
+	}
+	if rows[0].LastError == "" {
+		t.Fatalf("expected dead-letter error to be set")
+	}
+
+	detail, found, err := store.GetDeadLetter(outboxID)
+	if err != nil {
+		t.Fatalf("get dead letter: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected dead-letter row to be found")
+	}
+	if detail.EventID != eventID {
+		t.Fatalf("expected eventID %s, got %s", eventID, detail.EventID)
+	}
+
+	err = store.RetryDeadLetter(outboxID, now.Add(3*time.Second))
+	if err != nil {
+		t.Fatalf("retry dead letter: %v", err)
+	}
+
+	rows, err = store.ListDeadLetters(20, 0)
+	if err != nil {
+		t.Fatalf("list dead letters after retry: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected dead-letter queue to be empty after retry, got %d", len(rows))
+	}
+
+	claimedAgain, err := store.ClaimPendingForProcessing("analytics_processor", now.Add(30*time.Second), 10, now.Add(4*time.Second))
+	if err != nil {
+		t.Fatalf("claim pending after retry reset: %v", err)
+	}
+	if len(claimedAgain) != 1 {
+		t.Fatalf("expected retried row to be claimable, got %d", len(claimedAgain))
+	}
+	if claimedAgain[0].Attempt != 1 {
+		t.Fatalf("expected attempt to restart at 1 after retry, got %d", claimedAgain[0].Attempt)
+	}
+}

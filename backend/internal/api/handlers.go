@@ -104,6 +104,9 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		protected.POST("/sessions", h.createSession)
 		protected.GET("/sessions", h.listSessions)
 		protected.GET("/analytics/overview", h.getAnalyticsOverview)
+		protected.GET("/analytics/dlq", h.listAnalyticsDeadLetters)
+		protected.GET("/analytics/dlq/:outboxId", h.getAnalyticsDeadLetter)
+		protected.POST("/analytics/dlq/:outboxId/retry", h.retryAnalyticsDeadLetter)
 		protected.GET("/sessions/:id/program-items", h.listProgramItems)
 		protected.GET("/sessions/:id/logs", h.listSessionLogs)
 		protected.GET("/sessions/:id/analytics", h.getSessionAnalytics)
@@ -379,6 +382,103 @@ func (h *Handler) getAnalyticsOverview(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *Handler) listAnalyticsDeadLetters(c *gin.Context) {
+	dlqStore, ok := h.analyticsProcessorStore.(analytics.DeadLetterStore)
+	if !ok || dlqStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics dead-letter store not configured"})
+		return
+	}
+
+	limit := 50
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		limit = parsed
+	}
+
+	offset := 0
+	if raw := strings.TrimSpace(c.Query("offset")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+			return
+		}
+		offset = parsed
+	}
+
+	rows, err := dlqStore.ListDeadLetters(limit, offset)
+	if err != nil {
+		h.logger.Error("analytics_dlq_list_failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list dead-letter rows"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"rows": rows, "count": len(rows)})
+}
+
+func (h *Handler) getAnalyticsDeadLetter(c *gin.Context) {
+	dlqStore, ok := h.analyticsProcessorStore.(analytics.DeadLetterStore)
+	if !ok || dlqStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics dead-letter store not configured"})
+		return
+	}
+
+	outboxID, err := strconv.ParseInt(c.Param("outboxId"), 10, 64)
+	if err != nil || outboxID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid outboxId"})
+		return
+	}
+
+	row, found, err := dlqStore.GetDeadLetter(outboxID)
+	if err != nil {
+		h.logger.Error("analytics_dlq_get_failed", "outbox_id", outboxID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load dead-letter row"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "dead-letter row not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"row": row})
+}
+
+func (h *Handler) retryAnalyticsDeadLetter(c *gin.Context) {
+	dlqStore, ok := h.analyticsProcessorStore.(analytics.DeadLetterStore)
+	if !ok || dlqStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics dead-letter store not configured"})
+		return
+	}
+
+	outboxID, err := strconv.ParseInt(c.Param("outboxId"), 10, 64)
+	if err != nil || outboxID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid outboxId"})
+		return
+	}
+
+	_, found, err := dlqStore.GetDeadLetter(outboxID)
+	if err != nil {
+		h.logger.Error("analytics_dlq_pre_retry_get_failed", "outbox_id", outboxID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load dead-letter row"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "dead-letter row not found"})
+		return
+	}
+
+	if err = dlqStore.RetryDeadLetter(outboxID, time.Now().UTC()); err != nil {
+		h.logger.Error("analytics_dlq_retry_failed", "outbox_id", outboxID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retry dead-letter row"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "queued", "outboxId": outboxID})
 }
 
 func sessionSummaryFromProjection(p analytics.SessionProjection) analytics.SessionSummary {

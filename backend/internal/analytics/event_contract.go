@@ -52,6 +52,21 @@ type ProcessorFreshness struct {
 	OldestPendingAt *time.Time `json:"oldestPendingAt,omitempty"`
 }
 
+// DeadLetterRecord represents a failed outbox row parked in dead-letter state.
+type DeadLetterRecord struct {
+	OutboxID       int64
+	EventID        string
+	SessionID      string
+	ProgramItemID  *string
+	EventKey       string
+	OccurredAt     time.Time
+	IngestedAt     time.Time
+	Attempt        int
+	LastError      string
+	FailedAt       time.Time
+	PayloadJSON    []byte
+}
+
 // EventStore persists raw analytics events.
 type EventStore interface {
 	AppendEvent(record EventRecord) error
@@ -81,6 +96,13 @@ type ProcessorStore interface {
 	SaveCheckpoint(checkpoint ProcessorCheckpoint) error
 	LoadCheckpoint(workerName string) (ProcessorCheckpoint, bool, error)
 	GetFreshness(workerName string, now time.Time) (ProcessorFreshness, error)
+}
+
+// DeadLetterStore provides DLQ visibility and replay operations.
+type DeadLetterStore interface {
+	ListDeadLetters(limit int, offset int) ([]DeadLetterRecord, error)
+	GetDeadLetter(outboxID int64) (DeadLetterRecord, bool, error)
+	RetryDeadLetter(outboxID int64, now time.Time) error
 }
 
 // SessionProjection is the materialized per-session analytics summary produced by the processor.

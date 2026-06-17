@@ -598,6 +598,160 @@ func (s *SqliteStore) GetFreshness(workerName string, now time.Time) (ProcessorF
 	return freshness, nil
 }
 
+func (s *SqliteStore) ListDeadLetters(limit int, offset int) ([]DeadLetterRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := s.db.Query(`
+		SELECT o.id, o.event_id, e.session_id, e.program_item_id, e.event_key,
+			e.occurred_at, e.ingested_at, o.attempt, o.last_error, o.updated_at, e.payload_json
+		FROM analytics_outbox o
+		JOIN analytics_events e ON e.id = o.event_id
+		WHERE o.state = ?
+		ORDER BY o.updated_at DESC, o.id DESC
+		LIMIT ? OFFSET ?
+	`, OutboxStateDeadLetter, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list dead-letter rows: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]DeadLetterRecord, 0, limit)
+	for rows.Next() {
+		var rec DeadLetterRecord
+		var programItemIDRaw, lastErrorRaw sql.NullString
+		var occurredAtRaw, ingestedAtRaw, failedAtRaw string
+		if err = rows.Scan(
+			&rec.OutboxID,
+			&rec.EventID,
+			&rec.SessionID,
+			&programItemIDRaw,
+			&rec.EventKey,
+			&occurredAtRaw,
+			&ingestedAtRaw,
+			&rec.Attempt,
+			&lastErrorRaw,
+			&failedAtRaw,
+			&rec.PayloadJSON,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan dead-letter row: %w", err)
+		}
+		if programItemIDRaw.Valid {
+			pid := programItemIDRaw.String
+			rec.ProgramItemID = &pid
+		}
+		if lastErrorRaw.Valid {
+			rec.LastError = lastErrorRaw.String
+		}
+		rec.OccurredAt, err = time.Parse(time.RFC3339Nano, occurredAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse dead-letter occurred_at: %w", err)
+		}
+		rec.IngestedAt, err = time.Parse(time.RFC3339Nano, ingestedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse dead-letter ingested_at: %w", err)
+		}
+		rec.FailedAt, err = time.Parse(time.RFC3339Nano, failedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse dead-letter failed_at: %w", err)
+		}
+		results = append(results, rec)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate dead-letter rows: %w", err)
+	}
+
+	return results, nil
+}
+
+func (s *SqliteStore) GetDeadLetter(outboxID int64) (DeadLetterRecord, bool, error) {
+	if outboxID <= 0 {
+		return DeadLetterRecord{}, false, fmt.Errorf("outbox id is required")
+	}
+
+	var rec DeadLetterRecord
+	var programItemIDRaw, lastErrorRaw sql.NullString
+	var occurredAtRaw, ingestedAtRaw, failedAtRaw string
+	err := s.db.QueryRow(`
+		SELECT o.id, o.event_id, e.session_id, e.program_item_id, e.event_key,
+			e.occurred_at, e.ingested_at, o.attempt, o.last_error, o.updated_at, e.payload_json
+		FROM analytics_outbox o
+		JOIN analytics_events e ON e.id = o.event_id
+		WHERE o.id = ? AND o.state = ?
+	`, outboxID, OutboxStateDeadLetter).Scan(
+		&rec.OutboxID,
+		&rec.EventID,
+		&rec.SessionID,
+		&programItemIDRaw,
+		&rec.EventKey,
+		&occurredAtRaw,
+		&ingestedAtRaw,
+		&rec.Attempt,
+		&lastErrorRaw,
+		&failedAtRaw,
+		&rec.PayloadJSON,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return DeadLetterRecord{}, false, nil
+		}
+		return DeadLetterRecord{}, false, fmt.Errorf("failed to load dead-letter row: %w", err)
+	}
+
+	if programItemIDRaw.Valid {
+		pid := programItemIDRaw.String
+		rec.ProgramItemID = &pid
+	}
+	if lastErrorRaw.Valid {
+		rec.LastError = lastErrorRaw.String
+	}
+	rec.OccurredAt, err = time.Parse(time.RFC3339Nano, occurredAtRaw)
+	if err != nil {
+		return DeadLetterRecord{}, false, fmt.Errorf("failed to parse dead-letter occurred_at: %w", err)
+	}
+	rec.IngestedAt, err = time.Parse(time.RFC3339Nano, ingestedAtRaw)
+	if err != nil {
+		return DeadLetterRecord{}, false, fmt.Errorf("failed to parse dead-letter ingested_at: %w", err)
+	}
+	rec.FailedAt, err = time.Parse(time.RFC3339Nano, failedAtRaw)
+	if err != nil {
+		return DeadLetterRecord{}, false, fmt.Errorf("failed to parse dead-letter failed_at: %w", err)
+	}
+
+	return rec, true, nil
+}
+
+func (s *SqliteStore) RetryDeadLetter(outboxID int64, now time.Time) error {
+	if outboxID <= 0 {
+		return fmt.Errorf("outbox id is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	res, err := s.db.Exec(`
+		UPDATE analytics_outbox
+		SET state = ?, lease_owner = NULL, leased_until = NULL, next_retry_at = NULL, attempt = 0, last_error = NULL, updated_at = ?
+		WHERE id = ? AND state = ?
+	`, OutboxStatePending, now.UTC().Format(time.RFC3339Nano), outboxID, OutboxStateDeadLetter)
+	if err != nil {
+		return fmt.Errorf("failed to retry dead-letter row: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("dead-letter row not found")
+	}
+
+	return nil
+}
+
 func (s *SqliteStore) UpsertSessionProjection(p SessionProjection) error {
 	if p.SessionID == "" {
 		return fmt.Errorf("session id is required")

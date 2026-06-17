@@ -27,6 +27,7 @@ type testAnalyticsProjectionProcessorStore struct {
 	sessionProjectionFound  bool
 	platformProjection      analytics.PlatformProjection
 	platformProjectionFound bool
+	deadLetters             map[int64]analytics.DeadLetterRecord
 }
 
 func (s *testAnalyticsProjectionProcessorStore) ClaimPendingForProcessing(workerName string, leaseUntil time.Time, limit int, now time.Time) ([]analytics.OutboxRecord, error) {
@@ -41,7 +42,7 @@ func (s *testAnalyticsProjectionProcessorStore) MarkProcessed(outboxID int64, no
 	return nil
 }
 
-func (s *testAnalyticsProjectionProcessorStore) MarkFailed(outboxID int64, lastError string, deadLetter bool, now time.Time) error {
+func (s *testAnalyticsProjectionProcessorStore) MarkFailed(outboxID int64, lastError string, deadLetter bool, nextRetryAt *time.Time, now time.Time) error {
 	return nil
 }
 
@@ -71,6 +72,32 @@ func (s *testAnalyticsProjectionProcessorStore) UpsertPlatformProjection(p analy
 
 func (s *testAnalyticsProjectionProcessorStore) GetPlatformProjection() (analytics.PlatformProjection, bool, error) {
 	return s.platformProjection, s.platformProjectionFound, nil
+}
+
+func (s *testAnalyticsProjectionProcessorStore) ListDeadLetters(limit int, offset int) ([]analytics.DeadLetterRecord, error) {
+	if s.deadLetters == nil {
+		return []analytics.DeadLetterRecord{}, nil
+	}
+	rows := make([]analytics.DeadLetterRecord, 0, len(s.deadLetters))
+	for _, row := range s.deadLetters {
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func (s *testAnalyticsProjectionProcessorStore) GetDeadLetter(outboxID int64) (analytics.DeadLetterRecord, bool, error) {
+	if s.deadLetters == nil {
+		return analytics.DeadLetterRecord{}, false, nil
+	}
+	row, ok := s.deadLetters[outboxID]
+	return row, ok, nil
+}
+
+func (s *testAnalyticsProjectionProcessorStore) RetryDeadLetter(outboxID int64, now time.Time) error {
+	if s.deadLetters != nil {
+		delete(s.deadLetters, outboxID)
+	}
+	return nil
 }
 
 func (s *testIngestionStore) AppendEventAndEnqueue(record analytics.EventRecord, now time.Time) error {
@@ -327,6 +354,103 @@ func TestGetAnalyticsOverviewUsesProjectionWhenAvailable(t *testing.T) {
 	}
 	if payload.Freshness.PendingCount != 1 {
 		t.Fatalf("expected freshness pendingCount=1, got %d", payload.Freshness.PendingCount)
+	}
+}
+
+func TestListAnalyticsDeadLettersReturnsRows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler, _, _, _, _ := newTestHandler(t)
+	handler.analyticsProcessorStore = &testAnalyticsProjectionProcessorStore{
+		deadLetters: map[int64]analytics.DeadLetterRecord{
+			11: {
+				OutboxID:   11,
+				EventID:    "evt_dlq_11",
+				SessionID:  "sess_dlq",
+				EventKey:   "PROGRAM_ITEM_ENDED",
+				Attempt:    5,
+				LastError:  "projection rebuild failed",
+				OccurredAt: time.Date(2026, 6, 17, 9, 0, 0, 0, time.UTC),
+				IngestedAt: time.Date(2026, 6, 17, 9, 0, 1, 0, time.UTC),
+				FailedAt:   time.Date(2026, 6, 17, 9, 0, 5, 0, time.UTC),
+			},
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/analytics/dlq?limit=10&offset=0", nil)
+
+	handler.listAnalyticsDeadLetters(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Rows  []analytics.DeadLetterRecord `json:"rows"`
+		Count int                          `json:"count"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Count != 1 || len(payload.Rows) != 1 {
+		t.Fatalf("expected one dead-letter row, got count=%d len=%d", payload.Count, len(payload.Rows))
+	}
+}
+
+func TestGetAnalyticsDeadLetterReturnsNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler, _, _, _, _ := newTestHandler(t)
+	handler.analyticsProcessorStore = &testAnalyticsProjectionProcessorStore{deadLetters: map[int64]analytics.DeadLetterRecord{}}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/analytics/dlq/99", nil)
+	c.Params = gin.Params{{Key: "outboxId", Value: "99"}}
+
+	handler.getAnalyticsDeadLetter(c)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRetryAnalyticsDeadLetterQueuesRow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler, _, _, _, _ := newTestHandler(t)
+	handler.analyticsProcessorStore = &testAnalyticsProjectionProcessorStore{
+		deadLetters: map[int64]analytics.DeadLetterRecord{
+			41: {
+				OutboxID:   41,
+				EventID:    "evt_dlq_41",
+				SessionID:  "sess_dlq",
+				EventKey:   "SESSION_ENDED",
+				Attempt:    5,
+				LastError:  "checkpoint save failed",
+				OccurredAt: time.Date(2026, 6, 17, 9, 0, 0, 0, time.UTC),
+				IngestedAt: time.Date(2026, 6, 17, 9, 0, 1, 0, time.UTC),
+				FailedAt:   time.Date(2026, 6, 17, 9, 0, 5, 0, time.UTC),
+			},
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/analytics/dlq/41/retry", nil)
+	c.Params = gin.Params{{Key: "outboxId", Value: "41"}}
+
+	handler.retryAnalyticsDeadLetter(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	store := handler.analyticsProcessorStore.(*testAnalyticsProjectionProcessorStore)
+	if _, exists := store.deadLetters[41]; exists {
+		t.Fatalf("expected dead-letter row to be removed after retry")
 	}
 }
 
