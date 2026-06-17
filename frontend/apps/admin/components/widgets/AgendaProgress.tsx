@@ -15,6 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { formatLocalTime } from "@/lib/date-time";
 import {
   ClipboardList,
   ArrowUp,
@@ -329,15 +330,9 @@ export default function AgendaProgress({
                   </Badge>
                 </div>
                 <div className="mt-1 text-purple-700">
-                  {new Date(item.scheduledStart).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
+                  {formatLocalTime(item.scheduledStart)}
                   {" - "}
-                  {new Date(item.scheduledEnd).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
+                  {formatLocalTime(item.scheduledEnd)}
                   {item.hostName ? ` • ${item.hostName}` : ""}
                 </div>
                 <div className="mt-2 flex gap-1">

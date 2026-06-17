@@ -5,14 +5,17 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"realtime-session-coordination/backend/internal/analytics"
 	"realtime-session-coordination/backend/internal/auth"
 	"realtime-session-coordination/backend/internal/logging"
 	"realtime-session-coordination/backend/internal/programitem"
 	"realtime-session-coordination/backend/internal/session"
+	"realtime-session-coordination/backend/internal/sessionlog"
 	"realtime-session-coordination/backend/internal/user"
 	"realtime-session-coordination/backend/internal/ws"
 
@@ -23,6 +26,10 @@ import (
 type Handler struct {
 	manager            *session.Manager
 	programItemManager *programitem.Manager
+	sessionLogManager  *sessionlog.Manager
+	analyticsManager   *analytics.Manager
+	analyticsEmitter   *analytics.Emitter
+	analyticsProcessorStore analytics.ProcessorStore
 	hub                *ws.Hub
 	authService        *auth.Service
 	logger             *slog.Logger
@@ -44,7 +51,22 @@ type runtimeEnvelope struct {
 	DeltaSeconds    int                   `json:"deltaSeconds,omitempty"`
 }
 
-func NewHandler(manager *session.Manager, programItemManager *programitem.Manager, hub *ws.Hub, authService *auth.Service, logger *slog.Logger) *Handler {
+type sessionLogSocketMessage struct {
+	Event      string              `json:"event"`
+	SessionLog sessionlog.Snapshot `json:"sessionLog"`
+}
+
+func NewHandler(
+	manager *session.Manager,
+	programItemManager *programitem.Manager,
+	sessionLogManager *sessionlog.Manager,
+	analyticsManager *analytics.Manager,
+	analyticsEmitter *analytics.Emitter,
+	analyticsProcessorStore analytics.ProcessorStore,
+	hub *ws.Hub,
+	authService *auth.Service,
+	logger *slog.Logger,
+) *Handler {
 	if logger == nil {
 		logger = logging.Default()
 	}
@@ -53,6 +75,10 @@ func NewHandler(manager *session.Manager, programItemManager *programitem.Manage
 	return &Handler{
 		manager:            manager,
 		programItemManager: programItemManager,
+		sessionLogManager:  sessionLogManager,
+		analyticsManager:   analyticsManager,
+		analyticsEmitter:   analyticsEmitter,
+		analyticsProcessorStore: analyticsProcessorStore,
 		hub:                hub,
 		authService:        authService,
 		logger:             logger,
@@ -77,7 +103,14 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		// Session routes
 		protected.POST("/sessions", h.createSession)
 		protected.GET("/sessions", h.listSessions)
+		protected.GET("/analytics/overview", h.getAnalyticsOverview)
+		protected.GET("/analytics/ops/status", h.getAnalyticsOpsStatus)
+		protected.GET("/analytics/dlq", h.listAnalyticsDeadLetters)
+		protected.GET("/analytics/dlq/:outboxId", h.getAnalyticsDeadLetter)
+		protected.POST("/analytics/dlq/:outboxId/retry", h.retryAnalyticsDeadLetter)
 		protected.GET("/sessions/:id/program-items", h.listProgramItems)
+		protected.GET("/sessions/:id/logs", h.listSessionLogs)
+		protected.GET("/sessions/:id/analytics", h.getSessionAnalytics)
 		protected.POST("/sessions/:id/program-items", h.createProgramItem)
 		protected.POST("/sessions/:id/program-items/reorder", h.reorderProgramItems)
 		protected.POST("/sessions/:id/start", h.startSession)
@@ -133,6 +166,14 @@ func (h *Handler) createSession(c *gin.Context) {
 		return
 	}
 
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: snap.ID,
+		EventType: sessionlog.SessionCreated,
+		MessageInput: sessionlog.MessageInput{
+			SessionTitle: snap.Title,
+		},
+	})
+
 	c.JSON(http.StatusCreated, gin.H{
 		"session":      snap,
 		"controlToken": token,
@@ -176,6 +217,347 @@ func (h *Handler) listProgramItems(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"programItems": items})
+}
+
+func (h *Handler) listSessionLogs(c *gin.Context) {
+	if h.sessionLogManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "session log manager not configured"})
+		return
+	}
+
+	sessionID := c.Param("id")
+	if !h.manager.SessionExists(sessionID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": session.ErrNotFound.Error()})
+		return
+	}
+
+	options := sessionlog.ListOptions{
+		EventType:  sessionlog.EventType(strings.ToUpper(strings.TrimSpace(c.Query("eventType")))),
+		EntityType: strings.TrimSpace(c.Query("entityType")),
+	}
+
+	if limitRaw := strings.TrimSpace(c.Query("limit")); limitRaw != "" {
+		limit, err := strconv.Atoi(limitRaw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		options.Limit = limit
+	}
+
+	if offsetRaw := strings.TrimSpace(c.Query("offset")); offsetRaw != "" {
+		offset, err := strconv.Atoi(offsetRaw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+			return
+		}
+		options.Offset = offset
+	}
+
+	logs, err := h.sessionLogManager.ListBySession(sessionID, options)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"logs":  logs,
+		"count": len(logs),
+	})
+}
+
+func (h *Handler) getSessionAnalytics(c *gin.Context) {
+	sessionID := c.Param("id")
+	now := time.Now().UTC()
+	// TODO(analytics-cache): Cache session analytics + freshness by session ID (short TTL) using in-memory cache or Redis.
+
+	var (
+		summary         analytics.SessionSummary
+		projectionFound bool
+	)
+
+	if h.analyticsProcessorStore != nil {
+		if projectionStore, ok := h.analyticsProcessorStore.(analytics.ProjectionStore); ok {
+			projection, found, projectionErr := projectionStore.GetSessionProjection(sessionID)
+			if projectionErr != nil {
+				h.logger.Error("analytics_session_projection_load_failed", "session_id", sessionID, "error", projectionErr)
+			} else if found {
+				summary = sessionSummaryFromProjection(projection)
+				projectionFound = true
+			}
+		}
+	}
+
+	if !projectionFound {
+		if h.analyticsManager == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
+			return
+		}
+		if h.programItemManager == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+			return
+		}
+
+		sessionSnap, err := h.manager.GetSnapshot(sessionID)
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+
+		items, err := h.programItemManager.ListSnapshots(sessionID)
+		if err != nil {
+			h.writeProgramItemErr(c, err)
+			return
+		}
+
+		summary = h.analyticsManager.BuildSessionSummary(sessionSnap, items, now)
+	}
+
+	response := gin.H{"analytics": summary}
+	if h.analyticsProcessorStore != nil {
+		freshness, freshErr := h.analyticsProcessorStore.GetFreshness("analytics_processor", now)
+		if freshErr != nil {
+			h.logger.Error("analytics_freshness_load_failed", "error", freshErr)
+		} else {
+			response["freshness"] = freshness
+		}
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *Handler) getAnalyticsOverview(c *gin.Context) {
+	now := time.Now().UTC()
+	// TODO(analytics-cache): Cache platform overview + freshness (short TTL) in-memory or Redis to reduce repeated aggregation reads.
+
+	var (
+		overview         analytics.PlatformOverview
+		projectionFound  bool
+	)
+
+	if h.analyticsProcessorStore != nil {
+		if projectionStore, ok := h.analyticsProcessorStore.(analytics.ProjectionStore); ok {
+			projection, found, projectionErr := projectionStore.GetPlatformProjection()
+			if projectionErr != nil {
+				h.logger.Error("analytics_platform_projection_load_failed", "error", projectionErr)
+			} else if found {
+				overview = platformOverviewFromProjection(projection)
+				projectionFound = true
+			}
+		}
+	}
+
+	if !projectionFound {
+		if h.analyticsManager == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
+			return
+		}
+		if h.programItemManager == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "program item manager not configured"})
+			return
+		}
+
+		sessions, err := h.manager.ListSnapshots()
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+
+		itemsBySession := make(map[string][]programitem.Snapshot, len(sessions))
+		for _, sessionSnap := range sessions {
+			items, listErr := h.programItemManager.ListSnapshots(sessionSnap.ID)
+			if listErr != nil {
+				h.writeProgramItemErr(c, listErr)
+				return
+			}
+			itemsBySession[sessionSnap.ID] = items
+		}
+
+		overview = h.analyticsManager.BuildPlatformOverview(sessions, itemsBySession, now)
+	}
+
+	response := gin.H{"overview": overview}
+	if h.analyticsProcessorStore != nil {
+		freshness, freshErr := h.analyticsProcessorStore.GetFreshness("analytics_processor", now)
+		if freshErr != nil {
+			h.logger.Error("analytics_freshness_load_failed", "error", freshErr)
+		} else {
+			response["freshness"] = freshness
+		}
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *Handler) listAnalyticsDeadLetters(c *gin.Context) {
+	dlqStore, ok := h.analyticsProcessorStore.(analytics.DeadLetterStore)
+	if !ok || dlqStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics dead-letter store not configured"})
+		return
+	}
+
+	limit := 50
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit"})
+			return
+		}
+		limit = parsed
+	}
+
+	offset := 0
+	if raw := strings.TrimSpace(c.Query("offset")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+			return
+		}
+		offset = parsed
+	}
+
+	rows, err := dlqStore.ListDeadLetters(limit, offset)
+	if err != nil {
+		h.logger.Error("analytics_dlq_list_failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list dead-letter rows"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"rows": rows, "count": len(rows)})
+}
+
+func (h *Handler) getAnalyticsDeadLetter(c *gin.Context) {
+	dlqStore, ok := h.analyticsProcessorStore.(analytics.DeadLetterStore)
+	if !ok || dlqStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics dead-letter store not configured"})
+		return
+	}
+
+	outboxID, err := strconv.ParseInt(c.Param("outboxId"), 10, 64)
+	if err != nil || outboxID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid outboxId"})
+		return
+	}
+
+	row, found, err := dlqStore.GetDeadLetter(outboxID)
+	if err != nil {
+		h.logger.Error("analytics_dlq_get_failed", "outbox_id", outboxID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load dead-letter row"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "dead-letter row not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"row": row})
+}
+
+func (h *Handler) retryAnalyticsDeadLetter(c *gin.Context) {
+	dlqStore, ok := h.analyticsProcessorStore.(analytics.DeadLetterStore)
+	if !ok || dlqStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics dead-letter store not configured"})
+		return
+	}
+
+	outboxID, err := strconv.ParseInt(c.Param("outboxId"), 10, 64)
+	if err != nil || outboxID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid outboxId"})
+		return
+	}
+
+	_, found, err := dlqStore.GetDeadLetter(outboxID)
+	if err != nil {
+		h.logger.Error("analytics_dlq_pre_retry_get_failed", "outbox_id", outboxID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load dead-letter row"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "dead-letter row not found"})
+		return
+	}
+
+	if err = dlqStore.RetryDeadLetter(outboxID, time.Now().UTC()); err != nil {
+		h.logger.Error("analytics_dlq_retry_failed", "outbox_id", outboxID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retry dead-letter row"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "queued", "outboxId": outboxID})
+}
+
+func (h *Handler) getAnalyticsOpsStatus(c *gin.Context) {
+	if h.analyticsProcessorStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics processor store not configured"})
+		return
+	}
+
+	// TODO(analytics-cache): Cache ops status payload (freshness + metrics) with very short TTL using in-memory cache or Redis.
+	now := time.Now().UTC()
+	freshness, err := h.analyticsProcessorStore.GetFreshness("analytics_processor", now)
+	if err != nil {
+		h.logger.Error("analytics_ops_freshness_load_failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load analytics freshness"})
+		return
+	}
+
+	var metrics analytics.ProcessorMetrics
+	if metricsStore, ok := h.analyticsProcessorStore.(analytics.ProcessorMetricsStore); ok {
+		metrics = metricsStore.GetProcessorMetrics()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"freshness": freshness,
+		"metrics":   metrics,
+	})
+}
+
+func sessionSummaryFromProjection(p analytics.SessionProjection) analytics.SessionSummary {
+	return analytics.SessionSummary{
+		SessionID:              p.SessionID,
+		SessionStatus:          p.SessionStatus,
+		SessionDurationSeconds: p.SessionDurationSeconds,
+		ProgramItemCount:       p.ProgramItemCount,
+		ScheduledCount:         p.ScheduledCount,
+		InProgressCount:        p.InProgressCount,
+		PausedCount:            p.PausedCount,
+		EndedCount:             p.EndedCount,
+		CanceledCount:          p.CanceledCount,
+		PlannedSeconds:         p.PlannedSeconds,
+		EffectiveBudgetSeconds: p.EffectiveBudgetSeconds,
+		TotalAdjustmentSeconds: p.TotalAdjustmentSeconds,
+		TotalPauseSeconds:      p.TotalPauseSeconds,
+		TotalPauseCount:        p.TotalPauseCount,
+		EndedOnTimeCount:       p.EndedOnTimeCount,
+		OverrunItemCount:       p.OverrunItemCount,
+		TotalOverrunSeconds:    p.TotalOverrunSeconds,
+		TotalUnderrunSeconds:   p.TotalUnderrunSeconds,
+		EndedOnTimeRatio:       p.EndedOnTimeRatio,
+		ComputedAt:             p.ComputedAt,
+	}
+}
+
+func platformOverviewFromProjection(p analytics.PlatformProjection) analytics.PlatformOverview {
+	return analytics.PlatformOverview{
+		TotalSessions:            p.TotalSessions,
+		CreatedSessions:          p.CreatedSessions,
+		LiveSessions:             p.LiveSessions,
+		PausedSessions:           p.PausedSessions,
+		EndedSessions:            p.EndedSessions,
+		TotalProgramItems:        p.TotalProgramItems,
+		EndedProgramItems:        p.EndedProgramItems,
+		OnTimeEndedProgramItems:  p.OnTimeEndedProgramItems,
+		OverrunProgramItems:      p.OverrunProgramItems,
+		TotalSessionDurationSecs: p.TotalSessionDurationSecs,
+		TotalPlannedSeconds:      p.TotalPlannedSeconds,
+		EffectiveBudgetSeconds:   p.EffectiveBudgetSeconds,
+		TotalAdjustmentSeconds:   p.TotalAdjustmentSeconds,
+		TotalPauseSeconds:        p.TotalPauseSeconds,
+		TotalPauseCount:          p.TotalPauseCount,
+		TotalOverrunSeconds:      p.TotalOverrunSeconds,
+		TotalUnderrunSeconds:     p.TotalUnderrunSeconds,
+		SessionCompletionRatio:   p.SessionCompletionRatio,
+		ProgramItemOnTimeRatio:   p.ProgramItemOnTimeRatio,
+		ComputedAt:               p.ComputedAt,
+	}
 }
 
 func (h *Handler) getCurrentProgramItem(c *gin.Context) {
@@ -243,6 +625,16 @@ func (h *Handler) createProgramItem(c *gin.Context) {
 		return
 	}
 
+	programItemID := snap.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     sessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemCreated,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: snap.Title,
+		},
+	})
+
 	h.broadcastProgramItemEvent(sessionID, programitem.Event{
 		Type:        programitem.EventCreated,
 		SessionID:   sessionID,
@@ -308,6 +700,16 @@ func (h *Handler) updateProgramItem(c *gin.Context) {
 		return
 	}
 
+	programItemID := snap.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemUpdated,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: snap.Title,
+		},
+	})
+
 	h.broadcastProgramItemEvent(item.SessionID, programitem.Event{
 		Type:        programitem.EventUpdated,
 		SessionID:   item.SessionID,
@@ -338,6 +740,16 @@ func (h *Handler) cancelProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+
+	programItemID := snap.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemCanceled,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: snap.Title,
+		},
+	})
 
 	h.broadcastProgramItemEvent(item.SessionID, programitem.Event{
 		Type:        programitem.EventCanceled,
@@ -387,6 +799,23 @@ func (h *Handler) startProgramItem(c *gin.Context) {
 		return
 	}
 
+	programItemID := item.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemStarted,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: item.Title,
+		},
+	})
+
+	// Emit analytics event for program item start
+	if err := h.analyticsEmitter.EmitProgramItemEvent(item.SessionID, itemID, "PROGRAM_ITEM_STARTED", map[string]any{
+		"title": item.Title,
+	}); err != nil {
+		h.logger.Error("emit_program_item_start_event", "error", err)
+	}
+
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
@@ -428,6 +857,23 @@ func (h *Handler) endProgramItem(c *gin.Context) {
 	})
 	if c.IsAborted() {
 		return
+	}
+
+	programItemID := item.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemEnded,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: item.Title,
+		},
+	})
+
+	// Emit analytics event for program item end
+	if err := h.analyticsEmitter.EmitProgramItemEvent(item.SessionID, itemID, "PROGRAM_ITEM_ENDED", map[string]any{
+		"title": item.Title,
+	}); err != nil {
+		h.logger.Error("emit_program_item_end_event", "error", err)
 	}
 
 	c.JSON(http.StatusOK, event)
@@ -485,6 +931,34 @@ func (h *Handler) pauseProgramItem(c *gin.Context) {
 		return
 	}
 
+	programItemID := item.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemPaused,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: item.Title,
+		},
+	})
+
+	if event.Session.Status == session.StatusPaused {
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID: item.SessionID,
+			EventType: sessionlog.SessionPaused,
+			MessageInput: sessionlog.MessageInput{
+				SessionTitle: event.Session.Title,
+			},
+			Metadata: map[string]any{"source": "program_item_pause"},
+		})
+	}
+
+	// Emit analytics event for program item pause
+	if err := h.analyticsEmitter.EmitProgramItemEvent(item.SessionID, itemID, "PROGRAM_ITEM_PAUSED", map[string]any{
+		"title": item.Title,
+	}); err != nil {
+		h.logger.Error("emit_program_item_pause_event", "error", err)
+	}
+
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
@@ -540,6 +1014,34 @@ func (h *Handler) resumeProgramItem(c *gin.Context) {
 		return
 	}
 
+	programItemID := item.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemResumed,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: item.Title,
+		},
+	})
+
+	if event.Session.Status == session.StatusLive {
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID: item.SessionID,
+			EventType: sessionlog.SessionResumed,
+			MessageInput: sessionlog.MessageInput{
+				SessionTitle: event.Session.Title,
+			},
+			Metadata: map[string]any{"source": "program_item_resume"},
+		})
+	}
+
+	// Emit analytics event for program item resume
+	if err := h.analyticsEmitter.EmitProgramItemEvent(item.SessionID, itemID, "PROGRAM_ITEM_RESUMED", map[string]any{
+		"title": item.Title,
+	}); err != nil {
+		h.logger.Error("emit_program_item_resume_event", "error", err)
+	}
+
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
@@ -590,6 +1092,18 @@ func (h *Handler) adjustProgramItemTime(c *gin.Context) {
 		return
 	}
 
+	programItemID := item.ID
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID:     item.SessionID,
+		ProgramItemID: &programItemID,
+		EventType:     sessionlog.ProgramItemTimeAdjusted,
+		MessageInput: sessionlog.MessageInput{
+			ProgramItemTitle: item.Title,
+			DeltaSeconds:     body.DeltaSeconds,
+		},
+		Metadata: map[string]any{"deltaSeconds": body.DeltaSeconds},
+	})
+
 	c.JSON(http.StatusOK, event)
 	h.hub.BroadcastWithRequestID(item.SessionID, event, RequestIDFromContext(c))
 }
@@ -620,6 +1134,15 @@ func (h *Handler) reorderProgramItems(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: sessionID,
+		EventType: sessionlog.ProgramItemsReordered,
+		MessageInput: sessionlog.MessageInput{
+			ReorderedItemCount: len(body.Items),
+		},
+		Metadata: map[string]any{"reorderedItemCount": len(body.Items)},
+	})
 
 	h.broadcastProgramItemEvent(sessionID, programitem.Event{
 		Type:         programitem.EventReordered,
@@ -656,6 +1179,22 @@ func (h *Handler) startSession(c *gin.Context) {
 	})
 	if c.IsAborted() {
 		return
+	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: id,
+		EventType: sessionlog.SessionStarted,
+		MessageInput: sessionlog.MessageInput{
+			SessionTitle: envelope.Session.Title,
+		},
+	})
+
+	// Emit analytics event for session start
+	if err := h.analyticsEmitter.EmitSessionEvent(id, "SESSION_STARTED", map[string]any{
+		"title":     envelope.Session.Title,
+		"startedAt": envelope.Session.CreatedAt,
+	}); err != nil {
+		h.logger.Error("emit_session_start_event", "error", err)
 	}
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
@@ -702,6 +1241,34 @@ func (h *Handler) pauseSession(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: id,
+		EventType: sessionlog.SessionPaused,
+		MessageInput: sessionlog.MessageInput{
+			SessionTitle: envelope.Session.Title,
+		},
+	})
+
+	if envelope.ProgramItem != nil {
+		programItemID := envelope.ProgramItem.ID
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID:     id,
+			ProgramItemID: &programItemID,
+			EventType:     sessionlog.CascadeProgramItemPausedBySession,
+			MessageInput: sessionlog.MessageInput{
+				ProgramItemTitle: envelope.ProgramItem.Title,
+			},
+		})
+	}
+
+	// Emit analytics event for session pause
+	if err := h.analyticsEmitter.EmitSessionEvent(id, "SESSION_PAUSED", map[string]any{
+		"title": envelope.Session.Title,
+	}); err != nil {
+		h.logger.Error("emit_session_pause_event", "error", err)
+	}
+
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -747,6 +1314,34 @@ func (h *Handler) resumeSession(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: id,
+		EventType: sessionlog.SessionResumed,
+		MessageInput: sessionlog.MessageInput{
+			SessionTitle: envelope.Session.Title,
+		},
+	})
+
+	if envelope.ProgramItem != nil {
+		programItemID := envelope.ProgramItem.ID
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID:     id,
+			ProgramItemID: &programItemID,
+			EventType:     sessionlog.CascadeProgramItemResumedBySession,
+			MessageInput: sessionlog.MessageInput{
+				ProgramItemTitle: envelope.ProgramItem.Title,
+			},
+		})
+	}
+
+	// Emit analytics event for session resume
+	if err := h.analyticsEmitter.EmitSessionEvent(id, "SESSION_RESUMED", map[string]any{
+		"title": envelope.Session.Title,
+	}); err != nil {
+		h.logger.Error("emit_session_resume_event", "error", err)
+	}
+
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -759,6 +1354,8 @@ func (h *Handler) endSession(c *gin.Context) {
 
 	var eventType string
 	var envelope runtimeEnvelope
+	var cascadedProgramItemID *string
+	var cascadedProgramItemTitle string
 	h.withSessionRuntimeLock(id, func() {
 		if h.programItemManager != nil {
 			current, _, currentErr := h.programItemManager.CurrentAndNextSnapshots(id, time.Now().UTC())
@@ -767,6 +1364,9 @@ func (h *Handler) endSession(c *gin.Context) {
 				return
 			}
 			if current != nil && (current.Status == programitem.StatusInProgress || current.Status == programitem.StatusPaused) {
+				capturedID := current.ID
+				cascadedProgramItemID = &capturedID
+				cascadedProgramItemTitle = current.Title
 				if _, endErr := h.programItemManager.End(current.ID); endErr != nil {
 					h.writeProgramItemErr(c, endErr)
 					return
@@ -792,6 +1392,33 @@ func (h *Handler) endSession(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: id,
+		EventType: sessionlog.SessionEnded,
+		MessageInput: sessionlog.MessageInput{
+			SessionTitle: envelope.Session.Title,
+		},
+	})
+
+	if cascadedProgramItemID != nil {
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID:     id,
+			ProgramItemID: cascadedProgramItemID,
+			EventType:     sessionlog.CascadeProgramItemEndedBySession,
+			MessageInput: sessionlog.MessageInput{
+				ProgramItemTitle: cascadedProgramItemTitle,
+			},
+		})
+	}
+
+	// Emit analytics event for session end
+	if err := h.analyticsEmitter.EmitSessionEvent(id, "SESSION_ENDED", map[string]any{
+		"title": envelope.Session.Title,
+	}); err != nil {
+		h.logger.Error("emit_session_end_event", "error", err)
+	}
+
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -859,6 +1486,30 @@ func (h *Handler) adjustTime(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
+
+	h.appendSessionLog(c, sessionlog.AppendInput{
+		SessionID: id,
+		EventType: sessionlog.SessionTimeAdjusted,
+		MessageInput: sessionlog.MessageInput{
+			DeltaSeconds: body.DeltaSeconds,
+		},
+		Metadata: map[string]any{"deltaSeconds": body.DeltaSeconds},
+	})
+
+	if envelope.ProgramItem != nil {
+		programItemID := envelope.ProgramItem.ID
+		h.appendSessionLog(c, sessionlog.AppendInput{
+			SessionID:     id,
+			ProgramItemID: &programItemID,
+			EventType:     sessionlog.CascadeProgramItemTimeAdjustedBySession,
+			MessageInput: sessionlog.MessageInput{
+				ProgramItemTitle: envelope.ProgramItem.Title,
+				DeltaSeconds:     body.DeltaSeconds,
+			},
+			Metadata: map[string]any{"deltaSeconds": body.DeltaSeconds},
+		})
+	}
+
 	c.JSON(http.StatusOK, envelope)
 	h.hub.BroadcastWithRequestID(id, envelope, RequestIDFromContext(c))
 }
@@ -1035,6 +1686,32 @@ func (h *Handler) broadcastProgramItemEvent(sessionID string, event programitem.
 		return
 	}
 	h.hub.BroadcastWithRequestID(sessionID, event, RequestIDFromContext(c))
+}
+
+func (h *Handler) appendSessionLog(c *gin.Context, input sessionlog.AppendInput) {
+	if h.sessionLogManager == nil {
+		return
+	}
+
+	input.RequestID = RequestIDFromContext(c)
+	created, err := h.sessionLogManager.Append(input)
+	if err != nil {
+		h.logger.Error(
+			"session_log_append_failed",
+			"session_id", input.SessionID,
+			"event_type", input.EventType.String(),
+			"request_id", input.RequestID,
+			"error", err,
+		)
+		return
+	}
+
+	if h.hub != nil && input.SessionID != "" {
+		h.hub.BroadcastWithRequestID(input.SessionID, sessionLogSocketMessage{
+			Event:      "session_log_appended",
+			SessionLog: created,
+		}, input.RequestID)
+	}
 }
 
 func CORSMiddleware() gin.HandlerFunc {

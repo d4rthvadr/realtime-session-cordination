@@ -4,7 +4,7 @@ node_modules/
 
 *.tsbuildinfo
 
-sessions.db
+sessions.db*
 
 # Next.js
 .next/

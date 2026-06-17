@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import SessionCreateModal from "@/components/SessionCreateModal";
 import { getSessionsList, SessionSnapshot } from "@/lib/actions";
+import { formatLocalDate } from "@/lib/date-time";
 import { formatClock } from "@/lib/session";
+import { getSessionStatusBadgeClasses } from "@/lib/session-status";
 import { Clock, Calendar, Plus, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -30,19 +32,6 @@ export default function SessionsListPage() {
   useEffect(() => {
     loadSessions();
   }, []);
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "LIVE":
-        return "bg-emerald-100 text-emerald-700 border-emerald-200";
-      case "PAUSED":
-        return "bg-amber-100 text-amber-700 border-amber-200";
-      case "ENDED":
-        return "bg-slate-100 text-slate-600 border-slate-200";
-      default:
-        return "bg-blue-100 text-blue-700 border-blue-200";
-    }
-  };
 
   return (
     <div className="max-w-[1600px] mx-auto p-4 sm:p-6 lg:p-8">
@@ -131,7 +120,7 @@ export default function SessionsListPage() {
                         <Badge
                           className={cn(
                             "text-xs font-semibold border",
-                            getStatusColor(session.status),
+                            getSessionStatusBadgeClasses(session.status),
                           )}
                         >
                           {session.status}
@@ -141,10 +130,10 @@ export default function SessionsListPage() {
                         {formatClock(session.durationSeconds, "00:00")}
                       </td>
                       <td className="p-4 text-sm text-slate-700 font-mono">
-                        {formatClock(session.remainingSeconds, "00:00")}
+                        {formatClock(session.durationSeconds, "00:00")}
                       </td>
                       <td className="p-4 text-sm text-slate-500">
-                        {new Date(session.createdAt).toLocaleDateString()}
+                        {formatLocalDate(session.createdAt)}
                       </td>
                       <td className="p-4">
                         <Link href={`/dashboard/sessions/${session.id}`}>

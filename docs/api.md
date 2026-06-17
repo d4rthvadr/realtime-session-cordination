@@ -114,6 +114,13 @@ See detailed formulas in docs/programitem-time-calculation.md.
 
 - GET /api/v1/sessions/:id returns unified runtime envelope.
 - GET /api/v1/sessions/:id/current-program-item returns current and next ProgramItem snapshots.
+- GET /api/v1/sessions/:id/logs returns paginated session log entries (auth required).
+- GET /api/v1/sessions/:id/analytics returns per-session analytics summary (auth required).
+- GET /api/v1/analytics/overview returns cross-session analytics overview (auth required).
+- GET /api/v1/analytics/ops/status returns analytics processor freshness + runtime metrics (auth required).
+- GET /api/v1/analytics/dlq returns dead-letter outbox rows (auth required).
+- GET /api/v1/analytics/dlq/:outboxId returns one dead-letter outbox row (auth required).
+- POST /api/v1/analytics/dlq/:outboxId/retry requeues a dead-letter row to pending (auth required).
 - POST /api/v1/sessions/:id/start returns unified runtime envelope.
 - POST /api/v1/sessions/:id/pause returns unified runtime envelope.
 - POST /api/v1/sessions/:id/resume returns unified runtime envelope.
@@ -128,6 +135,332 @@ See detailed formulas in docs/programitem-time-calculation.md.
 ### WebSocket Snapshot
 
 The websocket connect snapshot and runtime updates now use the same unified runtime envelope shape.
+
+Session log appends are also broadcast on the same session channel as lightweight payloads:
+
+```json
+{
+  "event": "session_log_appended",
+  "sessionLog": {
+    "id": "log_abc123",
+    "sessionId": "sess_abc123",
+    "programItemId": "pi_abc123",
+    "eventType": "PROGRAM_ITEM_PAUSED",
+    "message": "Paused program item \"Panel\"",
+    "metadata": { "deltaSeconds": 60 },
+    "occurredAt": "2026-06-02T10:20:00Z",
+    "requestId": "req_123",
+    "createdAt": "2026-06-02T10:20:00Z"
+  }
+}
+```
+
+These payloads intentionally do not include runtime `session/programItem` fields.
+
+### Analytics Summary Endpoints (Phase 2)
+
+Analytics raw event pipeline contract (Phase 2A):
+
+- `analytics_events` fields:
+  - `id` (string, primary key)
+  - `session_id` (string, required)
+  - `program_item_id` (string, optional)
+  - `event_key` (string, required)
+  - `occurred_at` (RFC3339 timestamp, required)
+  - `ingested_at` (RFC3339 timestamp, required)
+  - `source` (enum: `server`, `client`, required)
+  - `payload_json` (JSON string payload, required)
+- `analytics_outbox` states:
+  - `pending`
+  - `processing`
+  - `processed`
+  - `dead_letter`
+- `analytics_checkpoints` fields:
+  - `worker_name` (string, primary key)
+  - `last_event_id` (string, required)
+  - `updated_at` (RFC3339 timestamp, required)
+
+Per-session analytics:
+
+`GET /api/v1/sessions/:id/analytics`
+
+Response shape:
+
+```json
+{
+  "analytics": {
+    "sessionId": "sess_abc123",
+    "sessionStatus": "ENDED",
+    "sessionDurationSeconds": 3600,
+    "programItemCount": 8,
+    "scheduledCount": 0,
+    "inProgressCount": 0,
+    "pausedCount": 0,
+    "endedCount": 7,
+    "canceledCount": 1,
+    "plannedSeconds": 3600,
+    "effectiveBudgetSeconds": 3720,
+    "totalAdjustmentSeconds": 120,
+    "totalPauseSeconds": 180,
+    "totalPauseCount": 3,
+    "endedOnTimeCount": 5,
+    "overrunItemCount": 2,
+    "totalOverrunSeconds": 65,
+    "totalUnderrunSeconds": 140,
+    "endedOnTimeRatio": 0.7142857143,
+    "computedAt": "2026-06-02T11:00:00Z"
+  },
+  "freshness": {
+    "workerName": "analytics_processor",
+    "lastEventId": "evt_abc123",
+    "lastProcessedAt": "2026-06-15T12:00:00Z",
+    "pendingCount": 0,
+    "oldestPendingAt": null,
+    "retryDueCount": 0,
+    "deadLetterCount": 0,
+    "retryLagSeconds": 0
+  }
+}
+```
+
+Notes:
+
+- `freshness` is optional and only present when analytics processor store is configured and freshness lookup succeeds.
+- Handler behavior is projection-first with fallback:
+  - attempts to read `analytics_session_projections` via projection store
+  - falls back to on-demand `BuildSessionSummary` when projection is unavailable
+
+Platform overview analytics:
+
+`GET /api/v1/analytics/overview`
+
+Response shape:
+
+```json
+{
+  "overview": {
+    "totalSessions": 24,
+    "createdSessions": 3,
+    "liveSessions": 1,
+    "pausedSessions": 0,
+    "endedSessions": 20,
+    "totalProgramItems": 164,
+    "endedProgramItems": 141,
+    "onTimeEndedProgramItems": 109,
+    "overrunProgramItems": 32,
+    "totalSessionDurationSeconds": 54000,
+    "totalPlannedSeconds": 53520,
+    "effectiveBudgetSeconds": 54840,
+    "totalAdjustmentSeconds": 1320,
+    "totalPauseSeconds": 2180,
+    "totalPauseCount": 79,
+    "totalOverrunSeconds": 1820,
+    "totalUnderrunSeconds": 3015,
+    "sessionCompletionRatio": 0.8333333333,
+    "programItemOnTimeRatio": 0.7730496454,
+    "computedAt": "2026-06-02T11:00:00Z"
+  },
+  "freshness": {
+    "workerName": "analytics_processor",
+    "lastEventId": "evt_abc123",
+    "lastProcessedAt": "2026-06-15T12:00:00Z",
+    "pendingCount": 0,
+    "oldestPendingAt": null,
+    "retryDueCount": 0,
+    "deadLetterCount": 0,
+    "retryLagSeconds": 0
+  }
+}
+```
+
+Notes:
+
+- `freshness` uses normalized camelCase JSON fields:
+  - `workerName`
+  - `lastEventId`
+  - `lastProcessedAt`
+  - `pendingCount`
+  - `oldestPendingAt`
+  - `retryDueCount`
+  - `deadLetterCount`
+  - `retryLagSeconds`
+- `freshness` is optional and omitted when lookup fails.
+- Handler behavior is projection-first with fallback:
+  - attempts to read `analytics_platform_projection` via projection store
+  - falls back to on-demand `BuildPlatformOverview` when projection is unavailable
+
+Analytics operations status:
+
+`GET /api/v1/analytics/ops/status`
+
+Response shape:
+
+```json
+{
+  "freshness": {
+    "workerName": "analytics_processor",
+    "lastEventId": "evt_abc123",
+    "lastProcessedAt": "2026-06-15T12:00:00Z",
+    "pendingCount": 2,
+    "oldestPendingAt": "2026-06-15T11:59:12Z",
+    "retryDueCount": 1,
+    "deadLetterCount": 3,
+    "retryLagSeconds": 48
+  },
+  "metrics": {
+    "processedCount": 1200,
+    "failedCount": 14,
+    "deadLetterCount": 3,
+    "projectionErrorCount": 9,
+    "checkpointErrorCount": 2,
+    "lastBatchDurationMillis": 37,
+    "lastBatchAt": "2026-06-15T12:00:00Z"
+  }
+}
+```
+
+Notes:
+
+- `metrics` is present when the configured analytics processor store exposes runtime metrics.
+
+Analytics dead-letter queue (DLQ):
+
+`GET /api/v1/analytics/dlq?limit=<n>&offset=<n>`
+
+Response shape:
+
+```json
+{
+  "rows": [
+    {
+      "OutboxID": 42,
+      "EventID": "evt_abc123",
+      "SessionID": "sess_abc123",
+      "ProgramItemID": "pi_123",
+      "EventKey": "PROGRAM_ITEM_PAUSED",
+      "OccurredAt": "2026-06-15T11:58:00Z",
+      "IngestedAt": "2026-06-15T11:58:00Z",
+      "Attempt": 5,
+      "LastError": "projection rebuild failed: ...",
+      "FailedAt": "2026-06-15T11:59:00Z",
+      "PayloadJSON": "eyJ0eXBlIjoiUFJPR1JBTV9JVEVNX1BBVVNFRCJ9"
+    }
+  ],
+  "count": 1
+}
+```
+
+`GET /api/v1/analytics/dlq/:outboxId`
+
+Response shape:
+
+```json
+{
+  "row": {
+    "OutboxID": 42,
+    "EventID": "evt_abc123",
+    "SessionID": "sess_abc123",
+    "ProgramItemID": "pi_123",
+    "EventKey": "PROGRAM_ITEM_PAUSED",
+    "OccurredAt": "2026-06-15T11:58:00Z",
+    "IngestedAt": "2026-06-15T11:58:00Z",
+    "Attempt": 5,
+    "LastError": "projection rebuild failed: ...",
+    "FailedAt": "2026-06-15T11:59:00Z",
+    "PayloadJSON": "eyJ0eXBlIjoiUFJPR1JBTV9JVEVNX1BBVVNFRCJ9"
+  }
+}
+```
+
+Notes:
+
+- DLQ row objects currently serialize with exported Go field names (for example `OutboxID`, `EventID`).
+
+`POST /api/v1/analytics/dlq/:outboxId/retry`
+
+Response shape:
+
+```json
+{
+  "status": "queued",
+  "outboxId": 42
+}
+```
+
+### Session Log Taxonomy (Phase 1A)
+
+Session logs are append-only timeline records generated from host mutations and server-driven cascades.
+
+Canonical event types:
+
+- SESSION_CREATED
+- SESSION_STARTED
+- SESSION_PAUSED
+- SESSION_RESUMED
+- SESSION_ENDED
+- SESSION_TIME_ADJUSTED
+- PROGRAM_ITEM_CREATED
+- PROGRAM_ITEM_UPDATED
+- PROGRAM_ITEMS_REORDERED
+- PROGRAM_ITEM_CANCELED
+- PROGRAM_ITEM_STARTED
+- PROGRAM_ITEM_PAUSED
+- PROGRAM_ITEM_RESUMED
+- PROGRAM_ITEM_ENDED
+- PROGRAM_ITEM_TIME_ADJUSTED
+- CASCADE_PROGRAM_ITEM_PAUSED_BY_SESSION
+- CASCADE_PROGRAM_ITEM_RESUMED_BY_SESSION
+- CASCADE_PROGRAM_ITEM_ENDED_BY_SESSION
+- CASCADE_PROGRAM_ITEM_TIME_ADJUSTED_BY_SESSION
+
+Human-readable trail message templates:
+
+- SESSION_CREATED: Created session "{sessionTitle}"
+- SESSION_STARTED: Started session "{sessionTitle}"
+- SESSION_PAUSED: Paused session "{sessionTitle}"
+- SESSION_RESUMED: Resumed session "{sessionTitle}"
+- SESSION_ENDED: Ended session "{sessionTitle}"
+- SESSION_TIME_ADJUSTED: Adjusted session time by {+/-deltaSeconds}s
+- PROGRAM_ITEM_CREATED: Added program item "{programItemTitle}"
+- PROGRAM_ITEM_UPDATED: Updated program item "{programItemTitle}"
+- PROGRAM_ITEMS_REORDERED: Reordered {count} program items
+- PROGRAM_ITEM_CANCELED: Canceled program item "{programItemTitle}"
+- PROGRAM_ITEM_STARTED: Started program item "{programItemTitle}"
+- PROGRAM_ITEM_PAUSED: Paused program item "{programItemTitle}"
+- PROGRAM_ITEM_RESUMED: Resumed program item "{programItemTitle}"
+- PROGRAM_ITEM_ENDED: Ended program item "{programItemTitle}"
+- PROGRAM_ITEM_TIME_ADJUSTED: Adjusted program item "{programItemTitle}" by {+/-deltaSeconds}s
+- CASCADE_PROGRAM_ITEM_PAUSED_BY_SESSION: Auto-paused program item "{programItemTitle}" because session was paused
+- CASCADE_PROGRAM_ITEM_RESUMED_BY_SESSION: Auto-resumed program item "{programItemTitle}" because session was resumed
+- CASCADE_PROGRAM_ITEM_ENDED_BY_SESSION: Auto-ended program item "{programItemTitle}" because session was ended
+- CASCADE_PROGRAM_ITEM_TIME_ADJUSTED_BY_SESSION: Auto-adjusted program item "{programItemTitle}" by {+/-deltaSeconds}s from session adjustment
+
+This taxonomy is the canonical source for timeline semantics and should be reused by API serializers and admin UI mapping.
+
+### Session Log Persistence (Phase 1B)
+
+Session logs are stored as append-only rows with the following fields:
+
+- id
+- session_id
+- program_item_id (nullable)
+- event_type
+- message
+- metadata (JSON, nullable)
+- occurred_at (RFC3339 timestamp)
+- request_id (nullable)
+- created_at (RFC3339 timestamp)
+
+Ordering rule for timeline reads:
+
+- ORDER BY occurred_at DESC, created_at DESC, id DESC
+
+Pagination defaults used by the log manager:
+
+- default limit: 50
+- max limit: 200
+
+Phase 1B only adds persistence/wiring. Log emission endpoints are implemented in later phases.
 
 ## Base URL
 
@@ -256,6 +589,45 @@ Retrieve current runtime envelope. No authentication required (read-only).
 
 ```json
 { "error": "session not found" }
+```
+
+---
+
+### List Session Logs
+
+```
+GET /api/v1/sessions/:id/logs
+Authorization: Bearer <token>
+```
+
+Returns append-only session log entries ordered by newest first.
+
+Optional query params:
+
+- `limit` (int, default 50, max 200)
+- `offset` (int, default 0)
+- `eventType` (exact canonical event type, e.g. `SESSION_PAUSED`)
+- `entityType` (`session` | `program_item` | `cascade`)
+
+**Response (200):**
+
+```json
+{
+  "logs": [
+    {
+      "id": "log_abc123",
+      "sessionId": "sess_abc123",
+      "programItemId": "pi_abc123",
+      "eventType": "PROGRAM_ITEM_PAUSED",
+      "message": "Paused program item \"Panel\"",
+      "metadata": {},
+      "occurredAt": "2026-06-02T10:20:00Z",
+      "requestId": "req_123",
+      "createdAt": "2026-06-02T10:20:00Z"
+    }
+  ],
+  "count": 1
+}
 ```
 
 ---

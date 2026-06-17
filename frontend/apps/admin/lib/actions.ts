@@ -115,6 +115,117 @@ export interface RuntimeSnapshot {
   deltaSeconds?: number;
 }
 
+export interface SessionLogSnapshot {
+  id: string;
+  sessionId: string;
+  programItemId?: string;
+  eventType: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+  occurredAt: string;
+  requestId?: string;
+  createdAt: string;
+}
+
+export interface SessionLogListInput {
+  limit?: number;
+  offset?: number;
+  eventType?: string;
+  entityType?: "session" | "program_item" | "cascade";
+}
+
+export interface SessionAnalyticsSummary {
+  sessionId: string;
+  sessionStatus: string;
+  sessionDurationSeconds: number;
+  programItemCount: number;
+  scheduledCount: number;
+  inProgressCount: number;
+  pausedCount: number;
+  endedCount: number;
+  canceledCount: number;
+  plannedSeconds: number;
+  effectiveBudgetSeconds: number;
+  totalAdjustmentSeconds: number;
+  totalPauseSeconds: number;
+  totalPauseCount: number;
+  endedOnTimeCount: number;
+  overrunItemCount: number;
+  totalOverrunSeconds: number;
+  totalUnderrunSeconds: number;
+  endedOnTimeRatio: number;
+  computedAt: string;
+}
+
+export interface AnalyticsOverview {
+  totalSessions: number;
+  createdSessions: number;
+  liveSessions: number;
+  pausedSessions: number;
+  endedSessions: number;
+  totalProgramItems: number;
+  endedProgramItems: number;
+  onTimeEndedProgramItems: number;
+  overrunProgramItems: number;
+  totalSessionDurationSeconds: number;
+  totalPlannedSeconds: number;
+  effectiveBudgetSeconds: number;
+  totalAdjustmentSeconds: number;
+  totalPauseSeconds: number;
+  totalPauseCount: number;
+  totalOverrunSeconds: number;
+  totalUnderrunSeconds: number;
+  sessionCompletionRatio: number;
+  programItemOnTimeRatio: number;
+  computedAt: string;
+}
+
+export interface AnalyticsFreshness {
+  workerName: string;
+  lastEventId: string;
+  lastProcessedAt: string | null;
+  pendingCount: number;
+  oldestPendingAt: string | null;
+}
+
+export type AnalyticsDataSource =
+  | "projection_or_fallback"
+  | "unavailable"
+  | "error";
+
+function normalizeAnalyticsFreshness(data: any): AnalyticsFreshness | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  const workerName = typeof data.workerName === "string" ? data.workerName : "";
+  const lastEventId =
+    typeof data.lastEventId === "string" ? data.lastEventId : "";
+  const lastProcessedAtRaw =
+    typeof data.lastProcessedAt === "string" ? data.lastProcessedAt : null;
+  const oldestPendingAtRaw =
+    typeof data.oldestPendingAt === "string" ? data.oldestPendingAt : null;
+  const pendingCount =
+    typeof data.pendingCount === "number" ? data.pendingCount : 0;
+
+  if (
+    !workerName &&
+    !lastEventId &&
+    !lastProcessedAtRaw &&
+    pendingCount === 0
+  ) {
+    return null;
+  }
+
+  return {
+    workerName,
+    lastEventId,
+    lastProcessedAt: lastProcessedAtRaw,
+    pendingCount,
+    oldestPendingAt: oldestPendingAtRaw,
+  };
+}
+
 function runtimeResult(runtime: RuntimeSnapshot | null, error: string | null) {
   return {
     runtime,
@@ -170,6 +281,120 @@ export async function getSessionsList() {
     const message =
       error instanceof Error ? error.message : "Failed to fetch sessions";
     return { sessions: [], error: message };
+  }
+}
+
+// GET /api/v1/sessions/:id/analytics - Get per-session analytics summary
+export async function getSessionAnalytics(sessionId: string) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        analytics: null as SessionAnalyticsSummary | null,
+        freshness: null as AnalyticsFreshness | null,
+        source: "unavailable" as AnalyticsDataSource,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/sessions/${sessionId}/analytics`,
+      {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        analytics: null as SessionAnalyticsSummary | null,
+        freshness: null as AnalyticsFreshness | null,
+        source: "unavailable" as AnalyticsDataSource,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch session analytics: ${response.statusText}`,
+      );
+    }
+
+    const data = await response.json();
+    const freshness = normalizeAnalyticsFreshness(data.freshness);
+    return {
+      analytics: data.analytics as SessionAnalyticsSummary,
+      freshness,
+      source: "projection_or_fallback" as AnalyticsDataSource,
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch session analytics";
+    return {
+      analytics: null as SessionAnalyticsSummary | null,
+      freshness: null as AnalyticsFreshness | null,
+      source: "error" as AnalyticsDataSource,
+      error: message,
+    };
+  }
+}
+
+// GET /api/v1/analytics/overview - Get cross-session analytics overview
+export async function getAnalyticsOverview() {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        overview: null as AnalyticsOverview | null,
+        freshness: null as AnalyticsFreshness | null,
+        source: "unavailable" as AnalyticsDataSource,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/analytics/overview`,
+      {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        overview: null as AnalyticsOverview | null,
+        freshness: null as AnalyticsFreshness | null,
+        source: "unavailable" as AnalyticsDataSource,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch analytics overview: ${response.statusText}`,
+      );
+    }
+
+    const data = await response.json();
+    const freshness = normalizeAnalyticsFreshness(data.freshness);
+    return {
+      overview: data.overview as AnalyticsOverview,
+      freshness,
+      source: "projection_or_fallback" as AnalyticsDataSource,
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch analytics overview";
+    return {
+      overview: null as AnalyticsOverview | null,
+      freshness: null as AnalyticsFreshness | null,
+      source: "error" as AnalyticsDataSource,
+      error: message,
+    };
   }
 }
 
@@ -496,6 +721,61 @@ export async function getProgramItems(sessionId: string) {
     const message =
       error instanceof Error ? error.message : "Failed to fetch program items";
     return { programItems: [] as ProgramItemSnapshot[], error: message };
+  }
+}
+
+// GET /api/v1/sessions/:id/logs - List session logs
+export async function getSessionLogs(
+  sessionId: string,
+  input: SessionLogListInput = {},
+) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({ logs: [] as SessionLogSnapshot[] });
+    }
+
+    const params = new URLSearchParams();
+    if (typeof input.limit === "number") {
+      params.set("limit", String(input.limit));
+    }
+    if (typeof input.offset === "number") {
+      params.set("offset", String(input.offset));
+    }
+    if (input.eventType) {
+      params.set("eventType", input.eventType);
+    }
+    if (input.entityType) {
+      params.set("entityType", input.entityType);
+    }
+
+    const query = params.toString();
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/sessions/${sessionId}/logs${query ? `?${query}` : ""}`,
+      {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({ logs: [] as SessionLogSnapshot[] });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch session logs: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return {
+      logs: (data.logs || []) as SessionLogSnapshot[],
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to fetch session logs";
+    return { logs: [] as SessionLogSnapshot[], error: message };
   }
 }
 
