@@ -42,6 +42,7 @@ func (s *SqliteStore) runMigrations() error {
 		id TEXT PRIMARY KEY,
 		name TEXT,
 		type TEXT NOT NULL,
+		role TEXT NOT NULL DEFAULT 'user',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
 		deleted_at TEXT,
@@ -56,20 +57,51 @@ func (s *SqliteStore) runMigrations() error {
 	CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at);
 	`
 
-	_, err := s.db.Exec(query)
+	if _, err := s.db.Exec(query); err != nil {
+		return err
+	}
+
+	if err := s.ensureRoleColumn(); err != nil {
+		return err
+	}
+
+	_, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)`)
 	return err
 }
 
+func (s *SqliteStore) ensureRoleColumn() error {
+	var columnCount int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(1)
+		FROM pragma_table_info('users')
+		WHERE name = ?
+	`, "role").Scan(&columnCount); err != nil {
+		return fmt.Errorf("failed to inspect users columns: %w", err)
+	}
+	if columnCount > 0 {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`); err != nil {
+		return fmt.Errorf("failed to add users.role column: %w", err)
+	}
+	return nil
+}
+
 func (s *SqliteStore) Create(user *User) (*User, error) {
+	if user.Role == "" {
+		user.Role = RoleUser
+	}
+
 	_, err := s.db.Exec(`
 		INSERT INTO users (
-			id, name, type, created_at, updated_at, deleted_at,
+			id, name, type, role, created_at, updated_at, deleted_at,
 			is_visible, avatar_url, bio, is_active
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		user.ID,
 		user.Name,
 		user.Type,
+		user.Role,
 		user.CreatedAt.Format(time.RFC3339),
 		user.UpdatedAt.Format(time.RFC3339),
 		timeToString(user.DeletedAt),
@@ -87,7 +119,7 @@ func (s *SqliteStore) Create(user *User) (*User, error) {
 
 func (s *SqliteStore) GetByID(id string) (*User, error) {
 	row := s.db.QueryRow(`
-		SELECT id, name, type, created_at, updated_at, deleted_at,
+		SELECT id, name, type, role, created_at, updated_at, deleted_at,
 		       is_visible, avatar_url, bio, is_active
 		FROM users WHERE id = ?
 	`, id)
@@ -106,6 +138,7 @@ func (s *SqliteStore) GetByID(id string) (*User, error) {
 		&user.ID,
 		&name,
 		&user.Type,
+		&user.Role,
 		&createdAtStr,
 		&updatedAtStr,
 		&deletedAt,
@@ -122,6 +155,9 @@ func (s *SqliteStore) GetByID(id string) (*User, error) {
 	}
 
 	user.Name = nullStringPtr(name)
+	if user.Role == "" {
+		user.Role = RoleUser
+	}
 	user.DeletedAt = nullStringToTime(deletedAt)
 	user.AvatarURL = nullStringPtr(avatarURL)
 	user.Bio = nullStringPtr(bio)

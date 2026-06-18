@@ -53,6 +53,7 @@ func (s *SqliteStore) runMigrations() error {
 		duration_seconds INTEGER NOT NULL,
 		status TEXT NOT NULL,
 		control_token TEXT NOT NULL UNIQUE,
+		created_by TEXT,
 		created_at TEXT NOT NULL
 	);
 
@@ -64,7 +65,16 @@ func (s *SqliteStore) runMigrations() error {
 		return err
 	}
 
-	return s.ensureLegacyRuntimeColumnsDropped()
+	if err := s.ensureLegacyRuntimeColumnsDropped(); err != nil {
+		return err
+	}
+
+	if err := s.ensureCreatedByColumn(); err != nil {
+		return err
+	}
+
+	_, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_created_by ON sessions(created_by)`)
+	return err
 }
 
 func (s *SqliteStore) ensureLegacyRuntimeColumnsDropped() error {
@@ -132,10 +142,11 @@ func (s *SqliteStore) ensureLegacyRuntimeColumnsDropped() error {
 			duration_seconds INTEGER NOT NULL,
 			status TEXT NOT NULL,
 			control_token TEXT NOT NULL UNIQUE,
+			created_by TEXT,
 			created_at TEXT NOT NULL
 		)`,
-		`INSERT INTO sessions_new (id, title, speaker_name, duration_seconds, status, control_token, created_at)
-		 SELECT id, title, speaker_name, duration_seconds, status, control_token, created_at FROM sessions`,
+		`INSERT INTO sessions_new (id, title, speaker_name, duration_seconds, status, control_token, created_by, created_at)
+		 SELECT id, title, speaker_name, duration_seconds, status, control_token, NULL, created_at FROM sessions`,
 		`DROP TABLE sessions`,
 		`ALTER TABLE sessions_new RENAME TO sessions`,
 		`CREATE INDEX IF NOT EXISTS idx_control_token ON sessions(control_token)`,
@@ -156,13 +167,31 @@ func (s *SqliteStore) ensureLegacyRuntimeColumnsDropped() error {
 	return nil
 }
 
+func (s *SqliteStore) ensureCreatedByColumn() error {
+	var columnCount int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(1)
+		FROM pragma_table_info('sessions')
+		WHERE name = ?
+	`, "created_by").Scan(&columnCount); err != nil {
+		return fmt.Errorf("failed to inspect sessions columns: %w", err)
+	}
+	if columnCount > 0 {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE sessions ADD COLUMN created_by TEXT`); err != nil {
+		return fmt.Errorf("failed to add sessions.created_by column: %w", err)
+	}
+	return nil
+}
+
 // Create persists a new session to the database
 func (s *SqliteStore) Create(session *Session) (*Session, error) {
 	_, err := s.db.Exec(`
 		INSERT INTO sessions (
 			id, title, speaker_name, duration_seconds, status,
-			control_token, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			control_token, created_by, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		session.ID,
 		session.Title,
@@ -170,6 +199,7 @@ func (s *SqliteStore) Create(session *Session) (*Session, error) {
 		session.DurationSeconds,
 		session.Status,
 		session.ControlToken,
+		session.CreatedBy,
 		session.CreatedAt.Format(time.RFC3339),
 	)
 
@@ -184,11 +214,12 @@ func (s *SqliteStore) Create(session *Session) (*Session, error) {
 func (s *SqliteStore) Get(id string) (*Session, error) {
 	row := s.db.QueryRow(`
 		SELECT id, title, speaker_name, duration_seconds, status,
-		       control_token, created_at
+		       control_token, created_by, created_at
 		FROM sessions WHERE id = ?
 	`, id)
 
 	var session Session
+	var createdBy sql.NullString
 	var createdAtStr string
 
 	err := row.Scan(
@@ -198,6 +229,7 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 		&session.DurationSeconds,
 		&session.Status,
 		&session.ControlToken,
+		&createdBy,
 		&createdAtStr,
 	)
 
@@ -212,6 +244,7 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse created_at: %w", err)
 	}
+	session.CreatedBy = nullStringPtr(createdBy)
 	session.CreatedAt = createdAt
 
 	return &session, nil
@@ -221,7 +254,7 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 func (s *SqliteStore) List() ([]*Session, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, speaker_name, duration_seconds, status,
-		       control_token, created_at
+		       control_token, created_by, created_at
 		FROM sessions
 		ORDER BY created_at DESC
 	`)
@@ -233,6 +266,7 @@ func (s *SqliteStore) List() ([]*Session, error) {
 	sessions := make([]*Session, 0)
 	for rows.Next() {
 		var session Session
+		var createdBy sql.NullString
 		var createdAtStr string
 
 		err = rows.Scan(
@@ -242,6 +276,7 @@ func (s *SqliteStore) List() ([]*Session, error) {
 			&session.DurationSeconds,
 			&session.Status,
 			&session.ControlToken,
+			&createdBy,
 			&createdAtStr,
 		)
 		if err != nil {
@@ -252,6 +287,7 @@ func (s *SqliteStore) List() ([]*Session, error) {
 		if parseErr != nil {
 			return nil, fmt.Errorf("failed to parse created_at: %w", parseErr)
 		}
+		session.CreatedBy = nullStringPtr(createdBy)
 		session.CreatedAt = createdAt
 
 		sessions = append(sessions, &session)
@@ -326,4 +362,12 @@ func (s *SqliteStore) ValidateControlToken(id, token string) error {
 // Close closes the database connection
 func (s *SqliteStore) Close() error {
 	return s.db.Close()
+}
+
+func nullStringPtr(ns sql.NullString) *string {
+	if !ns.Valid {
+		return nil
+	}
+	v := ns.String
+	return &v
 }

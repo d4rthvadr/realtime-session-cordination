@@ -17,6 +17,10 @@ func (ms *MemoryStore) Create(user *User) (*User, error) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
+	if user.Role == "" {
+		user.Role = RoleUser
+	}
+
 	ms.users[user.ID] = user
 	return user, nil
 }

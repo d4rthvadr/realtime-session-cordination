@@ -28,6 +28,7 @@ type Session struct {
 	DurationSeconds int
 	Status          string
 	ControlToken    string
+	CreatedBy       *string
 	CreatedAt       time.Time
 }
 
@@ -50,6 +51,7 @@ type CreateInput struct {
 	Title           string `json:"title"`
 	SpeakerName     string `json:"speakerName"`
 	DurationSeconds int    `json:"durationSeconds"`
+	CreatedBy       *string `json:"-"`
 }
 
 type Manager struct {
@@ -85,6 +87,7 @@ func (m *Manager) Create(input CreateInput) (Snapshot, string, error) {
 		DurationSeconds: input.DurationSeconds,
 		Status:          StatusCreated,
 		ControlToken:    token,
+		CreatedBy:       input.CreatedBy,
 		CreatedAt:       now,
 	}
 
