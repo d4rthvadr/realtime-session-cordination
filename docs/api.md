@@ -482,6 +482,7 @@ Protected API endpoints require **JWT bearer authentication**.
 - JWT is issued by backend auth endpoints and includes user identity and role claims.
 
 Session control mutations additionally require a **control token** for the target session.
+
 - Header: `X-Control-Token: <token>`
 - Or query: `?controlToken=<token>`
 
