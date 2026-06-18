@@ -82,6 +82,17 @@ export function analyticsHealthLabel(
   }
 }
 
+/**
+ * Returns true when the freshness snapshot indicates one or more events have
+ * been permanently dead-lettered. Useful for surfacing a DLQ warning indicator
+ * independently of the main health state (which tracks processing lag/staleness).
+ */
+export function analyticsHasDLQWarning(
+  freshness: AnalyticsFreshness | null,
+): boolean {
+  return (freshness?.deadLetterCount ?? 0) > 0;
+}
+
 export function analyticsSourceLabel(
   source: AnalyticsDataSource | null,
   hasAnalyticsData: boolean,

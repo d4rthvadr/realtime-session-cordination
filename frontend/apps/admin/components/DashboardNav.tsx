@@ -30,6 +30,7 @@ export default function DashboardNav() {
   const navLinks = [
     { href: "/dashboard", label: "Dashboard" },
     { href: "/dashboard/sessions", label: "Sessions" },
+    { href: "/dashboard/ops", label: "Ops" },
   ];
 
   return (

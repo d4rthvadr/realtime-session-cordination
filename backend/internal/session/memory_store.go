@@ -39,6 +39,27 @@ func (ms *MemoryStore) Get(id string) (*Session, error) {
 	return s, nil
 }
 
+// GetForUser retrieves a session by ID when visible to the given user.
+func (ms *MemoryStore) GetForUser(id, userID string, isAdmin bool) (*Session, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+
+	s, ok := ms.sessions[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	if isAdmin {
+		return s, nil
+	}
+
+	if s.CreatedBy == nil || *s.CreatedBy != userID {
+		return nil, ErrNotFound
+	}
+
+	return s, nil
+}
+
 // List retrieves all sessions from memory ordered by newest first.
 func (ms *MemoryStore) List() ([]*Session, error) {
 	ms.mu.RLock()
@@ -47,6 +68,29 @@ func (ms *MemoryStore) List() ([]*Session, error) {
 	result := make([]*Session, 0, len(ms.sessions))
 	for _, s := range ms.sessions {
 		result = append(result, s)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+
+	return result, nil
+}
+
+// ListForUser retrieves sessions visible to the given user, ordered by newest first.
+func (ms *MemoryStore) ListForUser(userID string, isAdmin bool) ([]*Session, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+
+	result := make([]*Session, 0, len(ms.sessions))
+	for _, s := range ms.sessions {
+		if isAdmin {
+			result = append(result, s)
+			continue
+		}
+		if s.CreatedBy != nil && *s.CreatedBy == userID {
+			result = append(result, s)
+		}
 	}
 
 	sort.Slice(result, func(i, j int) bool {

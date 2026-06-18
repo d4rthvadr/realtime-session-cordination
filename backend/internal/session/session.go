@@ -28,6 +28,7 @@ type Session struct {
 	DurationSeconds int
 	Status          string
 	ControlToken    string
+	CreatedBy       *string
 	CreatedAt       time.Time
 }
 
@@ -50,6 +51,7 @@ type CreateInput struct {
 	Title           string `json:"title"`
 	SpeakerName     string `json:"speakerName"`
 	DurationSeconds int    `json:"durationSeconds"`
+	CreatedBy       *string `json:"-"`
 }
 
 type Manager struct {
@@ -85,6 +87,7 @@ func (m *Manager) Create(input CreateInput) (Snapshot, string, error) {
 		DurationSeconds: input.DurationSeconds,
 		Status:          StatusCreated,
 		ControlToken:    token,
+		CreatedBy:       input.CreatedBy,
 		CreatedAt:       now,
 	}
 
@@ -106,6 +109,34 @@ func (m *Manager) GetSnapshot(id string) (Snapshot, error) {
 
 func (m *Manager) ListSnapshots() ([]Snapshot, error) {
 	sessions, err := m.store.List()
+	if err != nil {
+		return nil, err
+	}
+
+	snapshots := make([]Snapshot, 0, len(sessions))
+	for _, s := range sessions {
+		snapshots = append(snapshots, buildSnapshot(s))
+	}
+
+	return snapshots, nil
+}
+
+// GetSnapshotForUser returns a snapshot if the user owns it or is admin.
+// Admin users can see all sessions. Non-admin users can only see sessions they created.
+// Sessions with null createdBy (legacy) are admin-only.
+func (m *Manager) GetSnapshotForUser(id, userID string, isAdmin bool) (Snapshot, error) {
+	s, err := m.store.GetForUser(id, userID, isAdmin)
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	return buildSnapshot(s), nil
+}
+
+// ListSnapshotsForUser returns snapshots the user has access to.
+// Admin users see all sessions. Non-admin users see only their own sessions.
+func (m *Manager) ListSnapshotsForUser(userID string, isAdmin bool) ([]Snapshot, error) {
+	sessions, err := m.store.ListForUser(userID, isAdmin)
 	if err != nil {
 		return nil, err
 	}

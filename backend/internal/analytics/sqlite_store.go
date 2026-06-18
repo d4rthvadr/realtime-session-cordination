@@ -50,7 +50,8 @@ func NewSqliteStore(dbPath string) (*SqliteStore, error) {
 }
 
 func (s *SqliteStore) runMigrations() error {
-	statements := []string{
+	// Phase 1: create tables (IF NOT EXISTS — safe to re-run on existing DBs).
+	tables := []string{
 		`CREATE TABLE IF NOT EXISTS analytics_events (
 			id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL,
@@ -62,8 +63,6 @@ func (s *SqliteStore) runMigrations() error {
 			payload_json TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_analytics_events_session_occurred ON analytics_events(session_id, occurred_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_analytics_events_event_key ON analytics_events(event_key)`,
 		`CREATE TABLE IF NOT EXISTS analytics_outbox (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			event_id TEXT NOT NULL UNIQUE,
@@ -77,9 +76,6 @@ func (s *SqliteStore) runMigrations() error {
 			updated_at TEXT NOT NULL,
 			FOREIGN KEY (event_id) REFERENCES analytics_events(id) ON DELETE CASCADE
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_state_retry ON analytics_outbox(state, next_retry_at, leased_until)`,
-		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_state_lease ON analytics_outbox(state, leased_until)`,
-		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_created ON analytics_outbox(created_at)`,
 		`CREATE TABLE IF NOT EXISTS analytics_checkpoints (
 			worker_name TEXT PRIMARY KEY,
 			last_event_id TEXT NOT NULL,
@@ -135,14 +131,33 @@ func (s *SqliteStore) runMigrations() error {
 		)`,
 	}
 
-	for _, stmt := range statements {
+	for _, stmt := range tables {
 		if _, err := s.db.Exec(stmt); err != nil {
 			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
+
+	// Phase 2: apply incremental column additions before creating indexes that
+	// depend on them. This handles DBs created before next_retry_at was added.
 	if err := s.ensureOutboxRetryColumn(); err != nil {
 		return err
 	}
+
+	// Phase 3: create indexes (IF NOT EXISTS — safe to re-run).
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_analytics_events_session_occurred ON analytics_events(session_id, occurred_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_events_event_key ON analytics_events(event_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_state_retry ON analytics_outbox(state, next_retry_at, leased_until)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_state_lease ON analytics_outbox(state, leased_until)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_outbox_created ON analytics_outbox(created_at)`,
+	}
+
+	for _, stmt := range indexes {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("migration failed: %w", err)
+		}
+	}
+
 	return nil
 }
 

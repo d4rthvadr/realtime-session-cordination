@@ -1,4 +1,5 @@
 import BentoSessionView from "../../../components/BentoSessionView";
+import { cookies } from "next/headers";
 
 interface SessionPageProps {
   params: {
@@ -7,5 +8,11 @@ interface SessionPageProps {
 }
 
 export default function SessionAdminPage({ params }: SessionPageProps) {
-  return <BentoSessionView sessionId={params.sessionId} />;
+  const wsAccessToken = cookies().get("admin_auth_token")?.value ?? null;
+  return (
+    <BentoSessionView
+      sessionId={params.sessionId}
+      wsAccessToken={wsAccessToken}
+    />
+  );
 }

@@ -5,12 +5,15 @@ import "time"
 const (
 	TypeGuest  = "guest"
 	TypeNormal = "normal"
+	RoleUser   = "user"
+	RoleAdmin  = "admin"
 )
 
 type User struct {
 	ID        string
 	Name      *string
 	Type      string
+	Role      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time
@@ -24,6 +27,7 @@ type Snapshot struct {
 	ID        string     `json:"id"`
 	Name      *string    `json:"name,omitempty"`
 	Type      string     `json:"type"`
+	Role      string     `json:"role"`
 	CreatedAt time.Time  `json:"createdAt"`
 	UpdatedAt time.Time  `json:"updatedAt"`
 	DeletedAt *time.Time `json:"deletedAt,omitempty"`
@@ -38,6 +42,7 @@ func ToSnapshot(u *User) Snapshot {
 		ID:        u.ID,
 		Name:      u.Name,
 		Type:      u.Type,
+		Role:      u.Role,
 		CreatedAt: u.CreatedAt,
 		UpdatedAt: u.UpdatedAt,
 		DeletedAt: u.DeletedAt,
