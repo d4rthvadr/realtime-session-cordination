@@ -56,6 +56,18 @@ type sessionLogSocketMessage struct {
 	SessionLog sessionlog.Snapshot `json:"sessionLog"`
 }
 
+type otpRequestInput struct {
+	Email  string `json:"email" binding:"required,email"`
+	Intent string `json:"intent" binding:"required"`
+}
+
+type otpVerifyInput struct {
+	Email       string `json:"email" binding:"required,email"`
+	Intent      string `json:"intent" binding:"required"`
+	ChallengeID string `json:"challengeId" binding:"required"`
+	Code        string `json:"code" binding:"required"`
+}
+
 func NewHandler(
 	manager *session.Manager,
 	programItemManager *programitem.Manager,
@@ -97,6 +109,8 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	apiV1 := router.Group("/api/v1")
 	{
 		apiV1.POST("/auth/guest", h.createGuest)
+		apiV1.POST("/auth/otp/request", h.requestOTP)
+		apiV1.POST("/auth/otp/verify", h.verifyOTP)
 
 		protected := apiV1.Group("")
 		protected.Use(h.requireAuth())
@@ -156,6 +170,54 @@ func (h *Handler) createGuest(c *gin.Context) {
 		"token": token,
 		"user":  user.ToSnapshot(u),
 	})
+}
+
+func (h *Handler) requestOTP(c *gin.Context) {
+	var input otpRequestInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	intent, ok := normalizeOTPIntent(input.Intent)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "intent must be one of: signup, signin"})
+		return
+	}
+
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error":  "otp request flow is not implemented yet",
+		"intent": intent,
+	})
+}
+
+func (h *Handler) verifyOTP(c *gin.Context) {
+	var input otpVerifyInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	intent, ok := normalizeOTPIntent(input.Intent)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "intent must be one of: signup, signin"})
+		return
+	}
+
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error":       "otp verify flow is not implemented yet",
+		"intent":      intent,
+		"challengeId": strings.TrimSpace(input.ChallengeID),
+	})
+}
+
+func normalizeOTPIntent(intent string) (string, bool) {
+	trimmed := strings.ToLower(strings.TrimSpace(intent))
+	if trimmed != "signup" && trimmed != "signin" {
+		return "", false
+	}
+
+	return trimmed, true
 }
 
 func (h *Handler) createSession(c *gin.Context) {

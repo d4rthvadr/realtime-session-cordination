@@ -532,6 +532,110 @@ Returns service health status.
 
 ---
 
+### Create Guest Session
+
+```
+POST /api/v1/auth/guest
+Content-Type: application/json
+```
+
+Creates a guest user and returns a backend-issued JWT.
+
+**Response (201):**
+
+```json
+{
+  "token": "<jwt>",
+  "user": {
+    "id": "user_abc123",
+    "type": "guest",
+    "role": "user",
+    "createdAt": "2026-06-18T10:00:00Z",
+    "updatedAt": "2026-06-18T10:00:00Z",
+    "isVisible": true,
+    "isActive": true
+  }
+}
+```
+
+---
+
+### Request OTP (Unified Contract)
+
+```
+POST /api/v1/auth/otp/request
+Content-Type: application/json
+```
+
+Requests an OTP challenge for either signup or signin intent.
+
+**Request Body:**
+
+```json
+{
+  "email": "user@example.com",
+  "intent": "signup"
+}
+```
+
+Allowed intent values:
+
+- `signup`
+- `signin`
+
+Phase status:
+
+- Contract and route are present.
+- Service flow is not implemented yet; endpoint currently returns `501`.
+
+**Current Response (501):**
+
+```json
+{
+  "error": "otp request flow is not implemented yet",
+  "intent": "signup"
+}
+```
+
+---
+
+### Verify OTP (Unified Contract)
+
+```
+POST /api/v1/auth/otp/verify
+Content-Type: application/json
+```
+
+Verifies an OTP code for a challenge and intent.
+
+**Request Body:**
+
+```json
+{
+  "email": "user@example.com",
+  "intent": "signup",
+  "challengeId": "challenge_123",
+  "code": "123456"
+}
+```
+
+Phase status:
+
+- Contract and route are present.
+- Verification and token issuance flow is not implemented yet; endpoint currently returns `501`.
+
+**Current Response (501):**
+
+```json
+{
+  "error": "otp verify flow is not implemented yet",
+  "intent": "signup",
+  "challengeId": "challenge_123"
+}
+```
+
+---
+
 ### Create Session
 
 ```
