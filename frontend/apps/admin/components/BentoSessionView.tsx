@@ -32,6 +32,7 @@ import {
   analyticsHealthBadgeClasses,
   analyticsHealthLabel,
   analyticsSourceLabel,
+  analyticsHasDLQWarning,
 } from "@/lib/analytics-health";
 import { formatLocalTime } from "@/lib/date-time";
 import { formatClock } from "@/lib/session";
@@ -897,6 +898,12 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
                         : ""}
                       {analyticsFreshness?.lastProcessedAt
                         ? ` • last processed ${new Date(analyticsFreshness.lastProcessedAt).toLocaleTimeString()}`
+                        : ""}
+                      {analyticsFreshness?.retryDueCount
+                        ? ` • retries due ${analyticsFreshness.retryDueCount}`
+                        : ""}
+                      {analyticsHasDLQWarning(analyticsFreshness)
+                        ? ` • ⚠ DLQ ${analyticsFreshness!.deadLetterCount}`
                         : ""}
                     </p>
                   </div>

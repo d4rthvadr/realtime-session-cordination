@@ -186,12 +186,49 @@ export interface AnalyticsFreshness {
   lastProcessedAt: string | null;
   pendingCount: number;
   oldestPendingAt: string | null;
+  retryDueCount: number;
+  deadLetterCount: number;
+  retryLagSeconds: number;
 }
 
 export type AnalyticsDataSource =
   | "projection_or_fallback"
   | "unavailable"
   | "error";
+
+export interface ProcessorMetrics {
+  processedCount: number;
+  failedCount: number;
+  deadLetterCount: number;
+  projectionErrorCount: number;
+  checkpointErrorCount: number;
+  lastBatchDurationMillis: number;
+  lastBatchAt: string | null;
+}
+
+export interface OpsStatus {
+  freshness: AnalyticsFreshness | null;
+  metrics: ProcessorMetrics | null;
+}
+
+export interface DeadLetterRecord {
+  outboxId: number;
+  eventId: string;
+  sessionId: string;
+  programItemId: string | null;
+  eventKey: string;
+  occurredAt: string;
+  ingestedAt: string;
+  attempt: number;
+  lastError: string;
+  failedAt: string;
+  payloadJson: string | null;
+}
+
+export interface DLQListResult {
+  rows: DeadLetterRecord[];
+  count: number;
+}
 
 function normalizeAnalyticsFreshness(data: any): AnalyticsFreshness | null {
   if (!data || typeof data !== "object") {
@@ -207,12 +244,21 @@ function normalizeAnalyticsFreshness(data: any): AnalyticsFreshness | null {
     typeof data.oldestPendingAt === "string" ? data.oldestPendingAt : null;
   const pendingCount =
     typeof data.pendingCount === "number" ? data.pendingCount : 0;
+  const retryDueCount =
+    typeof data.retryDueCount === "number" ? data.retryDueCount : 0;
+  const deadLetterCount =
+    typeof data.deadLetterCount === "number" ? data.deadLetterCount : 0;
+  const retryLagSeconds =
+    typeof data.retryLagSeconds === "number" ? data.retryLagSeconds : 0;
 
   if (
     !workerName &&
     !lastEventId &&
     !lastProcessedAtRaw &&
-    pendingCount === 0
+    pendingCount === 0 &&
+    retryDueCount === 0 &&
+    deadLetterCount === 0 &&
+    retryLagSeconds === 0
   ) {
     return null;
   }
@@ -223,6 +269,61 @@ function normalizeAnalyticsFreshness(data: any): AnalyticsFreshness | null {
     lastProcessedAt: lastProcessedAtRaw,
     pendingCount,
     oldestPendingAt: oldestPendingAtRaw,
+    retryDueCount,
+    deadLetterCount,
+    retryLagSeconds,
+  };
+}
+
+function normalizeProcessorMetrics(data: any): ProcessorMetrics | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  return {
+    processedCount:
+      typeof data.processedCount === "number" ? data.processedCount : 0,
+    failedCount: typeof data.failedCount === "number" ? data.failedCount : 0,
+    deadLetterCount:
+      typeof data.deadLetterCount === "number" ? data.deadLetterCount : 0,
+    projectionErrorCount:
+      typeof data.projectionErrorCount === "number"
+        ? data.projectionErrorCount
+        : 0,
+    checkpointErrorCount:
+      typeof data.checkpointErrorCount === "number"
+        ? data.checkpointErrorCount
+        : 0,
+    lastBatchDurationMillis:
+      typeof data.lastBatchDurationMillis === "number"
+        ? data.lastBatchDurationMillis
+        : 0,
+    lastBatchAt: typeof data.lastBatchAt === "string" ? data.lastBatchAt : null,
+  };
+}
+
+function normalizeDeadLetterRecord(data: any): DeadLetterRecord | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  if (typeof data.outboxId !== "number") {
+    return null;
+  }
+
+  return {
+    outboxId: data.outboxId,
+    eventId: typeof data.eventId === "string" ? data.eventId : "",
+    sessionId: typeof data.sessionId === "string" ? data.sessionId : "",
+    programItemId:
+      typeof data.programItemId === "string" ? data.programItemId : null,
+    eventKey: typeof data.eventKey === "string" ? data.eventKey : "",
+    occurredAt: typeof data.occurredAt === "string" ? data.occurredAt : "",
+    ingestedAt: typeof data.ingestedAt === "string" ? data.ingestedAt : "",
+    attempt: typeof data.attempt === "number" ? data.attempt : 0,
+    lastError: typeof data.lastError === "string" ? data.lastError : "",
+    failedAt: typeof data.failedAt === "string" ? data.failedAt : "",
+    payloadJson: typeof data.payloadJson === "string" ? data.payloadJson : null,
   };
 }
 
@@ -395,6 +496,197 @@ export async function getAnalyticsOverview() {
       source: "error" as AnalyticsDataSource,
       error: message,
     };
+  }
+}
+
+// GET /api/v1/analytics/ops/status - Get processor freshness + runtime metrics
+export async function getAnalyticsOpsStatus() {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        freshness: null as AnalyticsFreshness | null,
+        metrics: null as ProcessorMetrics | null,
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/analytics/ops/status`,
+      {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        freshness: null as AnalyticsFreshness | null,
+        metrics: null as ProcessorMetrics | null,
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch analytics ops status: ${response.statusText}`,
+      );
+    }
+
+    const data = await response.json();
+    return {
+      freshness: normalizeAnalyticsFreshness(data.freshness),
+      metrics: normalizeProcessorMetrics(data.metrics),
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to fetch analytics ops status";
+    return {
+      freshness: null as AnalyticsFreshness | null,
+      metrics: null as ProcessorMetrics | null,
+      error: message,
+    };
+  }
+}
+
+// GET /api/v1/analytics/dlq - List dead-letter rows
+export async function getDLQList(limit: number = 50, offset: number = 0) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({ rows: [] as DeadLetterRecord[], count: 0 });
+    }
+
+    const query = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    }).toString();
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/analytics/dlq?${query}`,
+      {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({ rows: [] as DeadLetterRecord[], count: 0 });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch DLQ list: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const rows = Array.isArray(data.rows)
+      ? data.rows
+          .map((row: unknown) => normalizeDeadLetterRecord(row))
+          .filter((row: DeadLetterRecord | null): row is DeadLetterRecord =>
+            Boolean(row),
+          )
+      : [];
+
+    return {
+      rows,
+      count: typeof data.count === "number" ? data.count : rows.length,
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to fetch DLQ list";
+    return { rows: [] as DeadLetterRecord[], count: 0, error: message };
+  }
+}
+
+// GET /api/v1/analytics/dlq/:outboxId - Get one dead-letter row
+export async function getDLQItem(outboxId: number | string) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({ row: null as DeadLetterRecord | null });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/analytics/dlq/${String(outboxId)}`,
+      {
+        method: "GET",
+        headers,
+        cache: "no-store",
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({ row: null as DeadLetterRecord | null });
+    }
+
+    if (response.status === 404) {
+      return {
+        row: null as DeadLetterRecord | null,
+        error: "DLQ row not found",
+      };
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch DLQ row: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const row = normalizeDeadLetterRecord(data.row ?? data);
+    return { row, error: null };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to fetch DLQ row";
+    return { row: null as DeadLetterRecord | null, error: message };
+  }
+}
+
+// POST /api/v1/analytics/dlq/:outboxId/retry - Requeue one dead-letter row
+export async function retryDLQItem(outboxId: number | string) {
+  try {
+    const headers = getProtectedRequestHeaders();
+    if (!headers) {
+      return unauthorizedResult({
+        status: "error",
+        outboxId: String(outboxId),
+      });
+    }
+
+    const response = await fetch(
+      `${ADMIN_BACKEND_URL}/api/v1/analytics/dlq/${String(outboxId)}/retry`,
+      {
+        method: "POST",
+        headers,
+      },
+    );
+
+    if (response.status === 401) {
+      return unauthorizedResult({
+        status: "error",
+        outboxId: String(outboxId),
+      });
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to retry DLQ row: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return {
+      status: typeof data.status === "string" ? data.status : "queued",
+      outboxId:
+        typeof data.outboxId === "number" || typeof data.outboxId === "string"
+          ? String(data.outboxId)
+          : String(outboxId),
+      error: null,
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to retry DLQ row";
+    return { status: "error", outboxId: String(outboxId), error: message };
   }
 }
 

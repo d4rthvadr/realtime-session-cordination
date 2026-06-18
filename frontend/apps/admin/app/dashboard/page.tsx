@@ -12,12 +12,14 @@ import {
   SessionSnapshot,
   AnalyticsOverview,
   AnalyticsFreshness,
+  AnalyticsDataSource,
 } from "@/lib/actions";
 import {
   AnalyticsHealth,
   deriveAnalyticsHealth,
   analyticsHealthBadgeClasses,
   analyticsHealthLabel,
+  analyticsHasDLQWarning,
   analyticsSourceLabel,
 } from "@/lib/analytics-health";
 import { formatClock } from "@/lib/session";
@@ -121,6 +123,11 @@ function GlobalTimeHealthSection({
                 {analyticsSource}
                 {freshness ? ` • pending ${freshness.pendingCount}` : ""}
               </p>
+              {analyticsHasDLQWarning(freshness) && (
+                <Badge className="bg-red-50 text-red-700 border border-red-200 text-[10px] font-bold">
+                  DLQ: {freshness!.deadLetterCount}
+                </Badge>
+              )}
             </div>
           </div>
         </CardHeader>

@@ -11,3 +11,5 @@ export {
 export { default as SessionLog } from "./SessionLog";
 export type { LogEntry } from "./SessionLog";
 export { default as AgendaProgress } from "./AgendaProgress";
+export { default as OpsHealthCard } from "./OpsHealthCard";
+export { default as DLQSection } from "./DLQSection";
