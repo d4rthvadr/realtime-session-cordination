@@ -125,19 +125,9 @@ func (m *Manager) ListSnapshots() ([]Snapshot, error) {
 // Admin users can see all sessions. Non-admin users can only see sessions they created.
 // Sessions with null createdBy (legacy) are admin-only.
 func (m *Manager) GetSnapshotForUser(id, userID string, isAdmin bool) (Snapshot, error) {
-	s, err := m.store.Get(id)
+	s, err := m.store.GetForUser(id, userID, isAdmin)
 	if err != nil {
 		return Snapshot{}, err
-	}
-
-	// Admin users can access any session
-	if isAdmin {
-		return buildSnapshot(s), nil
-	}
-
-	// Non-admin users can only access sessions they created
-	if s.CreatedBy == nil || *s.CreatedBy != userID {
-		return Snapshot{}, ErrNotFound
 	}
 
 	return buildSnapshot(s), nil
@@ -146,24 +136,14 @@ func (m *Manager) GetSnapshotForUser(id, userID string, isAdmin bool) (Snapshot,
 // ListSnapshotsForUser returns snapshots the user has access to.
 // Admin users see all sessions. Non-admin users see only their own sessions.
 func (m *Manager) ListSnapshotsForUser(userID string, isAdmin bool) ([]Snapshot, error) {
-	sessions, err := m.store.List()
+	sessions, err := m.store.ListForUser(userID, isAdmin)
 	if err != nil {
 		return nil, err
 	}
 
 	snapshots := make([]Snapshot, 0, len(sessions))
-
 	for _, s := range sessions {
-		// Admin users see all sessions
-		if isAdmin {
-			snapshots = append(snapshots, buildSnapshot(s))
-			continue
-		}
-
-		// Non-admin users see only sessions they created
-		if s.CreatedBy != nil && *s.CreatedBy == userID {
-			snapshots = append(snapshots, buildSnapshot(s))
-		}
+		snapshots = append(snapshots, buildSnapshot(s))
 	}
 
 	return snapshots, nil

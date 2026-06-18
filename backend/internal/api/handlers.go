@@ -1557,7 +1557,31 @@ func (h *Handler) adjustTime(c *gin.Context) {
 
 func (h *Handler) sessionSocket(c *gin.Context) {
 	sessionID := c.Param("id")
-	if !h.manager.SessionExists(sessionID) {
+	if h.authService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "auth service not configured"})
+		return
+	}
+
+	rawToken := ""
+	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		rawToken = strings.TrimSpace(authHeader[7:])
+	}
+	if rawToken == "" {
+		rawToken = strings.TrimSpace(c.Query("accessToken"))
+	}
+	if rawToken == "" {
+		rawToken = strings.TrimSpace(c.Query("token"))
+	}
+
+	claims, err := h.authService.ValidateToken(rawToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": auth.ErrUnauthorized.Error()})
+		return
+	}
+
+	isAdmin := claims.Role == user.RoleAdmin
+	if _, err := h.manager.GetSnapshotForUser(sessionID, claims.Subject, isAdmin); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": session.ErrNotFound.Error()})
 		return
 	}
@@ -1574,7 +1598,11 @@ func (h *Handler) sessionSocket(c *gin.Context) {
 	envelope, err := h.buildRuntimeEnvelope(sessionID)
 	if err == nil {
 		envelope.Type = "SESSION_SNAPSHOT"
-		h.hub.Broadcast(sessionID, envelope)
+		_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if writeErr := conn.WriteJSON(envelope); writeErr != nil {
+			h.logger.Error("ws_initial_snapshot_write_failed", "error", writeErr, "session_id", sessionID, "request_id", RequestIDFromContext(c))
+			return
+		}
 	}
 
 	for {

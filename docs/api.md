@@ -116,11 +116,11 @@ See detailed formulas in docs/programitem-time-calculation.md.
 - GET /api/v1/sessions/:id/current-program-item returns current and next ProgramItem snapshots.
 - GET /api/v1/sessions/:id/logs returns paginated session log entries (auth required).
 - GET /api/v1/sessions/:id/analytics returns per-session analytics summary (auth required).
-- GET /api/v1/analytics/overview returns cross-session analytics overview (auth required).
-- GET /api/v1/analytics/ops/status returns analytics processor freshness + runtime metrics (auth required).
-- GET /api/v1/analytics/dlq returns dead-letter outbox rows (auth required).
-- GET /api/v1/analytics/dlq/:outboxId returns one dead-letter outbox row (auth required).
-- POST /api/v1/analytics/dlq/:outboxId/retry requeues a dead-letter row to pending (auth required).
+- GET /api/v1/analytics/overview returns cross-session analytics overview (admin role required).
+- GET /api/v1/analytics/ops/status returns analytics processor freshness + runtime metrics (admin role required).
+- GET /api/v1/analytics/dlq returns dead-letter outbox rows (admin role required).
+- GET /api/v1/analytics/dlq/:outboxId returns one dead-letter outbox row (admin role required).
+- POST /api/v1/analytics/dlq/:outboxId/retry requeues a dead-letter row to pending (admin role required).
 - POST /api/v1/sessions/:id/start returns unified runtime envelope.
 - POST /api/v1/sessions/:id/pause returns unified runtime envelope.
 - POST /api/v1/sessions/:id/resume returns unified runtime envelope.
@@ -234,6 +234,8 @@ Platform overview analytics:
 
 `GET /api/v1/analytics/overview`
 
+Requires admin role.
+
 Response shape:
 
 ```json
@@ -293,6 +295,8 @@ Analytics operations status:
 
 `GET /api/v1/analytics/ops/status`
 
+Requires admin role.
+
 Response shape:
 
 ```json
@@ -327,6 +331,8 @@ Analytics dead-letter queue (DLQ):
 
 `GET /api/v1/analytics/dlq?limit=<n>&offset=<n>`
 
+Requires admin role.
+
 Response shape:
 
 ```json
@@ -351,6 +357,8 @@ Response shape:
 ```
 
 `GET /api/v1/analytics/dlq/:outboxId`
+
+Requires admin role.
 
 Response shape:
 
@@ -468,7 +476,19 @@ Phase 1B only adds persistence/wiring. Log emission endpoints are implemented in
 
 ## Authentication
 
-Host operations require a **control token** obtained when creating a session.
+Protected API endpoints require **JWT bearer authentication**.
+
+- Header: `Authorization: Bearer <jwt>`
+- JWT is issued by backend auth endpoints and includes user identity and role claims.
+
+Session control mutations additionally require a **control token** for the target session.
+- Header: `X-Control-Token: <token>`
+- Or query: `?controlToken=<token>`
+
+Role-based authorization:
+
+- Most `/api/v1/sessions*` and `/api/v1/program-items*` routes: authenticated user
+- `/api/v1/analytics/overview`, `/api/v1/analytics/ops/status`, `/api/v1/analytics/dlq*`: admin role only
 
 ## Request ID Correlation
 
@@ -479,13 +499,13 @@ All HTTP endpoints support request correlation via `X-Request-ID`.
 - Response includes `X-Request-ID` for every request.
 - Backend structured logs include `request_id` to correlate API and related websocket-side errors.
 
-**Header Authorization:**
+**Control Token Header:**
 
 ```
 X-Control-Token: <token>
 ```
 
-**Query Parameter Authorization:**
+**Control Token Query Parameter:**
 
 ```
 ?controlToken=<token>
@@ -829,7 +849,10 @@ Performs position updates transactionally to avoid transient uniqueness conflict
 
 ## Host Control Endpoints
 
-All control endpoints require `X-Control-Token` authorization header or `?controlToken` query parameter.
+All control endpoints require both:
+
+- `Authorization: Bearer <jwt>`
+- `X-Control-Token: <token>` (or `?controlToken=<token>`)
 
 ### Start Session
 
@@ -1003,11 +1026,17 @@ Transition session to ENDED. No further state changes allowed.
 ```
 GET /ws/sessions/:id
 Upgrade: websocket
+Authorization: Bearer <jwt> (or `?accessToken=<jwt>` / `?token=<jwt>`)
 ```
 
 Establishes a persistent WebSocket connection for receiving real-time session updates.
 
-**No authentication required** (broadcast only, no mutations).
+Connection rules:
+
+- JWT is required.
+- Access is ownership-aware: admin users can connect to any session; non-admin users can only connect to their own sessions.
+- Unknown or unauthorized session IDs return `404`.
+- Initial `SESSION_SNAPSHOT` is sent only to the connecting socket.
 
 ---
 

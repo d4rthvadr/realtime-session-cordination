@@ -250,6 +250,51 @@ func (s *SqliteStore) Get(id string) (*Session, error) {
 	return &session, nil
 }
 
+// GetForUser retrieves a session by ID when visible to the given user.
+func (s *SqliteStore) GetForUser(id, userID string, isAdmin bool) (*Session, error) {
+	if isAdmin {
+		return s.Get(id)
+	}
+
+	row := s.db.QueryRow(`
+		SELECT id, title, speaker_name, duration_seconds, status,
+		       control_token, created_by, created_at
+		FROM sessions
+		WHERE id = ? AND created_by = ?
+	`, id, userID)
+
+	var session Session
+	var createdBy sql.NullString
+	var createdAtStr string
+
+	err := row.Scan(
+		&session.ID,
+		&session.Title,
+		&session.SpeakerName,
+		&session.DurationSeconds,
+		&session.Status,
+		&session.ControlToken,
+		&createdBy,
+		&createdAtStr,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session: %w", err)
+	}
+
+	createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse created_at: %w", err)
+	}
+	session.CreatedBy = nullStringPtr(createdBy)
+	session.CreatedAt = createdAt
+
+	return &session, nil
+}
+
 // List retrieves all sessions ordered by creation time descending.
 func (s *SqliteStore) List() ([]*Session, error) {
 	rows, err := s.db.Query(`
@@ -263,13 +308,39 @@ func (s *SqliteStore) List() ([]*Session, error) {
 	}
 	defer rows.Close()
 
+	return scanSessions(rows)
+}
+
+// ListForUser retrieves sessions visible to the given user.
+// Admin users can see all sessions. Non-admin users only see sessions they created.
+func (s *SqliteStore) ListForUser(userID string, isAdmin bool) ([]*Session, error) {
+	if isAdmin {
+		return s.List()
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, title, speaker_name, duration_seconds, status,
+		       control_token, created_by, created_at
+		FROM sessions
+		WHERE created_by = ?
+		ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	return scanSessions(rows)
+}
+
+func scanSessions(rows *sql.Rows) ([]*Session, error) {
 	sessions := make([]*Session, 0)
 	for rows.Next() {
 		var session Session
 		var createdBy sql.NullString
 		var createdAtStr string
 
-		err = rows.Scan(
+		err := rows.Scan(
 			&session.ID,
 			&session.Title,
 			&session.SpeakerName,
@@ -293,8 +364,8 @@ func (s *SqliteStore) List() ([]*Session, error) {
 		sessions = append(sessions, &session)
 	}
 
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed while iterating sessions: %w", err)
+	if rowErr := rows.Err(); rowErr != nil {
+		return nil, fmt.Errorf("failed while iterating sessions: %w", rowErr)
 	}
 
 	return sessions, nil
