@@ -43,17 +43,34 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(signInUrl);
   }
 
-  // Redirect authenticated users away from auth paths
-  if (isAuthPath(pathname) && token) {
-    return NextResponse.redirect(new URL("/dashboard", req.url));
+  const auth = token ? await verifyAuth(token) : null;
+
+  // If token exists but is invalid, clear it to prevent redirect loops.
+  if (token && !auth) {
+    if (isAuthPath(pathname)) {
+      const response = NextResponse.next();
+      response.cookies.delete(AUTH_COOKIE_NAME);
+      return response;
+    }
+
+    const signInUrl = new URL("/signin", req.url);
+    signInUrl.searchParams.set("next", pathname);
+    const response = NextResponse.redirect(signInUrl);
+    response.cookies.delete(AUTH_COOKIE_NAME);
+    return response;
+  }
+
+  // Redirect authenticated users away from auth paths.
+  // Admin users land on dashboard; non-admin users land on sessions.
+  if (isAuthPath(pathname) && auth) {
+    const destination = auth.role === "admin" ? "/dashboard" : "/sessions";
+    return NextResponse.redirect(new URL(destination, req.url));
   }
 
   // Gate /dashboard routes to admin role only
-  if (pathname.startsWith("/dashboard") && token) {
-    const auth = await verifyAuth(token);
-    if (!auth || auth.role !== "admin") {
-      // Redirect non-admin users to home or signin
-      return NextResponse.redirect(new URL("/signin", req.url));
+  if (pathname.startsWith("/dashboard") && auth) {
+    if (auth.role !== "admin") {
+      return NextResponse.redirect(new URL("/sessions", req.url));
     }
   }
 

@@ -39,9 +39,7 @@ export default function SignUpPage() {
       }
 
       // Navigate to verification page with email in query
-      router.push(
-        `/auth/verify?email=${encodeURIComponent(email)}&type=signup`,
-      );
+      router.push(`/verify?email=${encodeURIComponent(email)}&type=signup`);
     });
   };
 
@@ -54,7 +52,7 @@ export default function SignUpPage() {
         return;
       }
 
-      router.push("/dashboard");
+      router.push("/sessions");
     });
   };
 
