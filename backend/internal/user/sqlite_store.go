@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -41,8 +42,10 @@ func (s *SqliteStore) runMigrations() error {
 	CREATE TABLE IF NOT EXISTS users (
 		id TEXT PRIMARY KEY,
 		name TEXT,
+		email TEXT,
 		type TEXT NOT NULL,
 		role TEXT NOT NULL DEFAULT 'user',
+		email_verified_at TEXT,
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
 		deleted_at TEXT,
@@ -65,7 +68,14 @@ func (s *SqliteStore) runMigrations() error {
 		return err
 	}
 
-	_, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)`)
+	if err := s.ensureEmailColumns(); err != nil {
+		return err
+	}
+
+	_, err := s.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email);
+	`)
 	return err
 }
 
@@ -87,21 +97,58 @@ func (s *SqliteStore) ensureRoleColumn() error {
 	return nil
 }
 
+func (s *SqliteStore) ensureEmailColumns() error {
+	var emailColumnCount int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(1)
+		FROM pragma_table_info('users')
+		WHERE name = ?
+	`, "email").Scan(&emailColumnCount); err != nil {
+		return fmt.Errorf("failed to inspect users columns: %w", err)
+	}
+	if emailColumnCount == 0 {
+		if _, err := s.db.Exec(`ALTER TABLE users ADD COLUMN email TEXT`); err != nil {
+			return fmt.Errorf("failed to add users.email column: %w", err)
+		}
+	}
+
+	var verifiedColumnCount int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(1)
+		FROM pragma_table_info('users')
+		WHERE name = ?
+	`, "email_verified_at").Scan(&verifiedColumnCount); err != nil {
+		return fmt.Errorf("failed to inspect users columns: %w", err)
+	}
+	if verifiedColumnCount == 0 {
+		if _, err := s.db.Exec(`ALTER TABLE users ADD COLUMN email_verified_at TEXT`); err != nil {
+			return fmt.Errorf("failed to add users.email_verified_at column: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func (s *SqliteStore) Create(user *User) (*User, error) {
 	if user.Role == "" {
 		user.Role = RoleUser
 	}
 
+	normalizedEmail := normalizeEmailForSQL(user.Email)
+	user.Email = normalizedStringPtr(normalizedEmail)
+
 	_, err := s.db.Exec(`
 		INSERT INTO users (
-			id, name, type, role, created_at, updated_at, deleted_at,
-			is_visible, avatar_url, bio, is_active
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			id, name, email, type, role, email_verified_at, created_at, updated_at,
+			deleted_at, is_visible, avatar_url, bio, is_active
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		user.ID,
 		user.Name,
+		user.Email,
 		user.Type,
 		user.Role,
+		timeToString(user.EmailVerifiedAt),
 		user.CreatedAt.Format(time.RFC3339),
 		user.UpdatedAt.Format(time.RFC3339),
 		timeToString(user.DeletedAt),
@@ -119,13 +166,15 @@ func (s *SqliteStore) Create(user *User) (*User, error) {
 
 func (s *SqliteStore) GetByID(id string) (*User, error) {
 	row := s.db.QueryRow(`
-		SELECT id, name, type, role, created_at, updated_at, deleted_at,
+		SELECT id, name, email, type, role, email_verified_at, created_at, updated_at, deleted_at,
 		       is_visible, avatar_url, bio, is_active
 		FROM users WHERE id = ?
 	`, id)
 
 	var user User
 	var name sql.NullString
+	var email sql.NullString
+	var emailVerifiedAt sql.NullString
 	var deletedAt sql.NullString
 	var avatarURL sql.NullString
 	var bio sql.NullString
@@ -137,8 +186,10 @@ func (s *SqliteStore) GetByID(id string) (*User, error) {
 	err := row.Scan(
 		&user.ID,
 		&name,
+		&email,
 		&user.Type,
 		&user.Role,
+		&emailVerifiedAt,
 		&createdAtStr,
 		&updatedAtStr,
 		&deletedAt,
@@ -155,9 +206,83 @@ func (s *SqliteStore) GetByID(id string) (*User, error) {
 	}
 
 	user.Name = nullStringPtr(name)
+	user.Email = nullStringPtr(email)
 	if user.Role == "" {
 		user.Role = RoleUser
 	}
+	user.EmailVerifiedAt = nullStringToTime(emailVerifiedAt)
+	user.DeletedAt = nullStringToTime(deletedAt)
+	user.AvatarURL = nullStringPtr(avatarURL)
+	user.Bio = nullStringPtr(bio)
+	user.IsVisible = isVisible == 1
+	user.IsActive = isActive == 1
+
+	createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse created_at: %w", err)
+	}
+	updatedAt, err := time.Parse(time.RFC3339, updatedAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse updated_at: %w", err)
+	}
+	user.CreatedAt = createdAt
+	user.UpdatedAt = updatedAt
+
+	return &user, nil
+}
+
+func (s *SqliteStore) GetByEmail(email string) (*User, error) {
+	normalizedEmail := normalizeEmailForSQL(&email)
+	if normalizedEmail == nil {
+		return nil, ErrNotFound
+	}
+
+	row := s.db.QueryRow(`
+		SELECT id, name, email, type, role, email_verified_at, created_at, updated_at, deleted_at,
+		       is_visible, avatar_url, bio, is_active
+		FROM users WHERE email = ?
+	`, *normalizedEmail)
+
+	var user User
+	var name sql.NullString
+	var userEmail sql.NullString
+	var emailVerifiedAt sql.NullString
+	var deletedAt sql.NullString
+	var avatarURL sql.NullString
+	var bio sql.NullString
+	var createdAtStr string
+	var updatedAtStr string
+	var isVisible int
+	var isActive int
+
+	err := row.Scan(
+		&user.ID,
+		&name,
+		&userEmail,
+		&user.Type,
+		&user.Role,
+		&emailVerifiedAt,
+		&createdAtStr,
+		&updatedAtStr,
+		&deletedAt,
+		&isVisible,
+		&avatarURL,
+		&bio,
+		&isActive,
+	)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user by email: %w", err)
+	}
+
+	user.Name = nullStringPtr(name)
+	user.Email = nullStringPtr(userEmail)
+	if user.Role == "" {
+		user.Role = RoleUser
+	}
+	user.EmailVerifiedAt = nullStringToTime(emailVerifiedAt)
 	user.DeletedAt = nullStringToTime(deletedAt)
 	user.AvatarURL = nullStringPtr(avatarURL)
 	user.Bio = nullStringPtr(bio)
@@ -195,6 +320,27 @@ func timeToString(t *time.Time) *string {
 	}
 	str := t.Format(time.RFC3339)
 	return &str
+}
+
+func normalizedStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	v := *value
+	return &v
+}
+
+func normalizeEmailForSQL(email *string) *string {
+	if email == nil {
+		return nil
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(*email))
+	if normalized == "" {
+		return nil
+	}
+
+	return &normalized
 }
 
 func nullStringPtr(ns sql.NullString) *string {
