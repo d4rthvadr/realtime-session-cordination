@@ -1027,15 +1027,16 @@ Transition session to ENDED. No further state changes allowed.
 ```
 GET /ws/sessions/:id
 Upgrade: websocket
-Authorization: Bearer <jwt> (or `?accessToken=<jwt>` / `?token=<jwt>`)
+Authorization: Bearer <jwt> (optional, or ?accessToken=<jwt> / ?token=<jwt>)
 ```
 
 Establishes a persistent WebSocket connection for receiving real-time session updates.
 
 Connection rules:
 
-- JWT is required.
-- Access is ownership-aware: admin users can connect to any session; non-admin users can only connect to their own sessions.
+- Public mode (no JWT): read-only viewer subscription is allowed for existing sessions.
+- Auth mode (JWT present): access is ownership-aware; admin users can connect to any session, non-admin users can only connect to their own sessions.
+- Invalid JWT returns `401`.
 - Unknown or unauthorized session IDs return `404`.
 - Initial `SESSION_SNAPSHOT` is sent only to the connecting socket.
 

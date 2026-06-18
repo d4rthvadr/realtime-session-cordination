@@ -1557,10 +1557,6 @@ func (h *Handler) adjustTime(c *gin.Context) {
 
 func (h *Handler) sessionSocket(c *gin.Context) {
 	sessionID := c.Param("id")
-	if h.authService == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "auth service not configured"})
-		return
-	}
 
 	rawToken := ""
 	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
@@ -1574,16 +1570,29 @@ func (h *Handler) sessionSocket(c *gin.Context) {
 		rawToken = strings.TrimSpace(c.Query("token"))
 	}
 
-	claims, err := h.authService.ValidateToken(rawToken)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": auth.ErrUnauthorized.Error()})
-		return
-	}
+	if rawToken == "" {
+		// Public viewer mode (used by apps/user): allow read-only subscription by session id.
+		if !h.manager.SessionExists(sessionID) {
+			c.JSON(http.StatusNotFound, gin.H{"error": session.ErrNotFound.Error()})
+			return
+		}
+	} else {
+		if h.authService == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "auth service not configured"})
+			return
+		}
 
-	isAdmin := claims.Role == user.RoleAdmin
-	if _, err := h.manager.GetSnapshotForUser(sessionID, claims.Subject, isAdmin); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": session.ErrNotFound.Error()})
-		return
+		claims, err := h.authService.ValidateToken(rawToken)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": auth.ErrUnauthorized.Error()})
+			return
+		}
+
+		isAdmin := claims.Role == user.RoleAdmin
+		if _, err := h.manager.GetSnapshotForUser(sessionID, claims.Subject, isAdmin); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": session.ErrNotFound.Error()})
+			return
+		}
 	}
 
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)

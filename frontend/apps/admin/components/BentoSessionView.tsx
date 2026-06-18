@@ -77,9 +77,13 @@ import { cn } from "@/lib/utils";
 
 interface BentoSessionViewProps {
   sessionId: string;
+  wsAccessToken?: string | null;
 }
 
-export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
+export default function BentoSessionView({
+  sessionId,
+  wsAccessToken,
+}: BentoSessionViewProps) {
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [programItems, setProgramItems] = useState<ProgramItemSnapshot[]>([]);
   const [sessionLogs, setSessionLogs] = useState<SessionLogSnapshot[]>([]);
@@ -149,8 +153,12 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
     let socket: WebSocket | null = null;
     let closed = false;
 
+    const wsPath = wsAccessToken
+      ? `/ws/sessions/${sessionId}?accessToken=${encodeURIComponent(wsAccessToken)}`
+      : `/ws/sessions/${sessionId}`;
+
     try {
-      socket = new WebSocket(buildAdminWsUrl(`/ws/sessions/${sessionId}`));
+      socket = new WebSocket(buildAdminWsUrl(wsPath));
     } catch {
       return;
     }
@@ -208,7 +216,7 @@ export default function BentoSessionView({ sessionId }: BentoSessionViewProps) {
         socket.close();
       }
     };
-  }, [sessionId]);
+  }, [sessionId, wsAccessToken]);
 
   // Keep runtime countdown smooth between server updates.
   useEffect(() => {
