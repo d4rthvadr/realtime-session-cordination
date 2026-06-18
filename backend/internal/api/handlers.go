@@ -103,11 +103,6 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		// Session routes
 		protected.POST("/sessions", h.createSession)
 		protected.GET("/sessions", h.listSessions)
-		protected.GET("/analytics/overview", h.getAnalyticsOverview)
-		protected.GET("/analytics/ops/status", h.getAnalyticsOpsStatus)
-		protected.GET("/analytics/dlq", h.listAnalyticsDeadLetters)
-		protected.GET("/analytics/dlq/:outboxId", h.getAnalyticsDeadLetter)
-		protected.POST("/analytics/dlq/:outboxId/retry", h.retryAnalyticsDeadLetter)
 		protected.GET("/sessions/:id/program-items", h.listProgramItems)
 		protected.GET("/sessions/:id/logs", h.listSessionLogs)
 		protected.GET("/sessions/:id/analytics", h.getSessionAnalytics)
@@ -126,6 +121,16 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		protected.POST("/program-items/:itemId/resume", h.resumeProgramItem)
 		protected.POST("/program-items/:itemId/adjust-time", h.adjustProgramItemTime)
 		protected.POST("/program-items/:itemId/end", h.endProgramItem)
+
+		// Admin-only routes
+		admin := apiV1.Group("")
+		admin.Use(h.requireAuth())
+		admin.Use(h.requireAdmin())
+		admin.GET("/analytics/overview", h.getAnalyticsOverview)
+		admin.GET("/analytics/ops/status", h.getAnalyticsOpsStatus)
+		admin.GET("/analytics/dlq", h.listAnalyticsDeadLetters)
+		admin.GET("/analytics/dlq/:outboxId", h.getAnalyticsDeadLetter)
+		admin.POST("/analytics/dlq/:outboxId/retry", h.retryAnalyticsDeadLetter)
 
 		// Public routes
 		apiV1.GET("/sessions/:id", h.getSession)
@@ -195,7 +200,34 @@ func (h *Handler) getSession(c *gin.Context) {
 }
 
 func (h *Handler) listSessions(c *gin.Context) {
-	snapshots, err := h.manager.ListSnapshots()
+	authUserID, authIDExists := c.Get("authUserID")
+	authUserRole, authRoleExists := c.Get("authUserRole")
+
+	// If context is missing auth values (e.g., in tests), fall back to listing all sessions
+	if !authIDExists || !authRoleExists {
+		snapshots, err := h.manager.ListSnapshots()
+		if err != nil {
+			h.writeDomainErr(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"sessions": snapshots})
+		return
+	}
+
+	userID, ok := authUserID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid user id in context"})
+		return
+	}
+
+	role, ok := authUserRole.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid role in context"})
+		return
+	}
+
+	isAdmin := role == user.RoleAdmin
+	snapshots, err := h.manager.ListSnapshotsForUser(userID, isAdmin)
 	if err != nil {
 		h.writeDomainErr(c, err)
 		return
@@ -210,7 +242,12 @@ func (h *Handler) listProgramItems(c *gin.Context) {
 		return
 	}
 
-	items, err := h.programItemManager.ListSnapshots(c.Param("id"))
+	sessionID := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
+		return
+	}
+
+	items, err := h.programItemManager.ListSnapshots(sessionID)
 	if err != nil {
 		h.writeProgramItemErr(c, err)
 		return
@@ -226,8 +263,7 @@ func (h *Handler) listSessionLogs(c *gin.Context) {
 	}
 
 	sessionID := c.Param("id")
-	if !h.manager.SessionExists(sessionID) {
-		c.JSON(http.StatusNotFound, gin.H{"error": session.ErrNotFound.Error()})
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
 		return
 	}
 
@@ -289,6 +325,11 @@ func (h *Handler) getSessionAnalytics(c *gin.Context) {
 	}
 
 	if !projectionFound {
+		// Only check ownership if we need to access the actual session (i.e., no projection available)
+		if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
+			return
+		}
+
 		if h.analyticsManager == nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
 			return
@@ -1606,8 +1647,77 @@ func (h *Handler) requireAuth() gin.HandlerFunc {
 
 		c.Set("authUserID", claims.Subject)
 		c.Set("authUserType", claims.UserType)
+		c.Set("authUserRole", claims.Role)
 		c.Next()
 	}
+}
+
+func (h *Handler) requireAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authUserRole, exists := c.Get("authUserRole")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "role not found in context"})
+			c.Abort()
+			return
+		}
+
+		role, ok := authUserRole.(string)
+		if !ok || role != user.RoleAdmin {
+			c.JSON(http.StatusForbidden, gin.H{"error": "admin role required"})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// getSessionSnapshotWithOwnershipCheck retrieves a session snapshot and enforces ownership rules.
+// Admin users can access any session. Non-admin users can only access sessions they created.
+// Returns the snapshot or false if access is denied; errors are written to the response.
+// If context is missing auth values (e.g., in tests), it grants access for backward compatibility.
+func (h *Handler) getSessionSnapshotWithOwnershipCheck(c *gin.Context, sessionID string) (session.Snapshot, bool) {
+	authUserID, authIDExists := c.Get("authUserID")
+	authUserRole, authRoleExists := c.Get("authUserRole")
+
+	// If context is missing auth values (e.g., in tests or unprotected routes), allow access for backward compatibility
+	if !authIDExists || !authRoleExists {
+		snap, err := h.manager.GetSnapshot(sessionID)
+		if err != nil {
+			if errors.Is(err, session.ErrNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": session.ErrNotFound.Error()})
+			} else {
+				h.writeDomainErr(c, err)
+			}
+			return session.Snapshot{}, false
+		}
+		return snap, true
+	}
+
+	userID, ok := authUserID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid user id in context"})
+		return session.Snapshot{}, false
+	}
+
+	role, ok := authUserRole.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid role in context"})
+		return session.Snapshot{}, false
+	}
+
+	isAdmin := role == user.RoleAdmin
+	snap, err := h.manager.GetSnapshotForUser(sessionID, userID, isAdmin)
+	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": session.ErrNotFound.Error()})
+		} else {
+			h.writeDomainErr(c, err)
+		}
+		return session.Snapshot{}, false
+	}
+
+	return snap, true
 }
 
 func (h *Handler) ensureProgramItemRuntimeAllowed(c *gin.Context, sessionID string) bool {

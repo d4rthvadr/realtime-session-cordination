@@ -20,6 +20,7 @@ var (
 type Claims struct {
 	UserType string `json:"user_type"`
 	IsActive bool   `json:"is_active"`
+	Role     string `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -94,7 +95,7 @@ func (s *Service) ValidateToken(rawToken string) (*Claims, error) {
 		return nil, ErrUnauthorized
 	}
 
-	if claims.Subject == "" || claims.UserType == "" || !claims.IsActive {
+	if claims.Subject == "" || claims.UserType == "" || !claims.IsActive || claims.Role == "" {
 		return nil, ErrUnauthorized
 	}
 
@@ -116,6 +117,7 @@ func (s *Service) issueToken(u *user.User) (string, error) {
 	claims := Claims{
 		UserType: u.Type,
 		IsActive: u.IsActive,
+		Role:     u.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   u.ID,
 			Issuer:    s.issuer,
