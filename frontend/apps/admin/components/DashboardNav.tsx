@@ -23,14 +23,18 @@ import { Bell, User, BarChart3, Menu, LogOut, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOutAdmin } from "@/lib/auth-actions";
 
-export default function DashboardNav() {
+interface DashboardNavProps {
+  isAdmin: boolean;
+}
+
+export default function DashboardNav({ isAdmin }: DashboardNavProps) {
   const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
 
   const navLinks = [
     { href: "/dashboard", label: "Dashboard" },
     { href: "/dashboard/sessions", label: "Sessions" },
-    { href: "/dashboard/ops", label: "Ops" },
+    ...(isAdmin ? [{ href: "/dashboard/ops", label: "Ops" }] : []),
   ];
 
   return (
