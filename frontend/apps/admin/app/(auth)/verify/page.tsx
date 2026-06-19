@@ -14,24 +14,33 @@ function VerifyOTPContent() {
   const searchParams = useSearchParams();
   const email = searchParams.get("email") || "";
   const type = searchParams.get("type") || "signin";
+  const initialChallengeId = searchParams.get("challengeId") || "";
+  const initialExpiresIn = parseInt(searchParams.get("expiresIn") || "10", 10);
 
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [challengeId, setChallengeId] = useState(initialChallengeId);
+  const [resendCooldown, setResendCooldown] = useState(0);
   const [isResending, setIsResending] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
-    // Redirect if no email provided
     if (!email) {
       router.push(`/${type}`);
     }
   }, [email, type, router]);
 
   useEffect(() => {
-    // Focus first input on mount
     inputRefs.current[0]?.focus();
   }, []);
+
+  // Resend cooldown countdown
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const id = setTimeout(() => setResendCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(id);
+  }, [resendCooldown]);
 
   const handleChange = (index: number, value: string) => {
     // Only allow numbers
@@ -81,7 +90,7 @@ function VerifyOTPContent() {
     }
 
     startTransition(async () => {
-      const result = await verifyOTP(email, code);
+      const result = await verifyOTP(email, code, type, challengeId);
 
       if (result.error) {
         setError(result.error);
@@ -91,22 +100,30 @@ function VerifyOTPContent() {
         return;
       }
 
-      // Redirect to dashboard
-      router.push("/dashboard");
+      // Redirect by role: admins go to dashboard, everyone else to sessions
+      if (result.role === "admin") {
+        router.push("/dashboard");
+      } else {
+        router.push("/sessions");
+      }
     });
   };
 
   const handleResend = async () => {
+    if (resendCooldown > 0) return;
     setIsResending(true);
     setError(null);
 
-    const result = await sendOTP(email);
+    const result = await sendOTP(email, type);
 
     if (result.error) {
       setError(result.error);
+    } else {
+      if (result.challengeId) setChallengeId(result.challengeId);
+      setResendCooldown(30);
     }
 
-    setTimeout(() => setIsResending(false), 1000);
+    setIsResending(false);
   };
 
   return (
@@ -174,10 +191,14 @@ function VerifyOTPContent() {
         <button
           type="button"
           onClick={handleResend}
-          disabled={isResending}
+          disabled={isResending || resendCooldown > 0}
           className="text-sm text-blue-600 hover:text-blue-700 font-medium transition-colors disabled:opacity-50"
         >
-          {isResending ? "Sending..." : "Resend code"}
+          {isResending
+            ? "Sending..."
+            : resendCooldown > 0
+              ? `Resend in ${resendCooldown}s`
+              : "Resend code"}
         </button>
       </div>
 
@@ -188,7 +209,7 @@ function VerifyOTPContent() {
           <p className="font-medium mb-1">Didn&apos;t receive the code?</p>
           <p className="text-blue-700">
             Check your spam folder or try resending the code. The code expires
-            in 10 minutes.
+            in {initialExpiresIn} minute{initialExpiresIn !== 1 ? "s" : ""}.
           </p>
         </div>
       </div>
