@@ -262,6 +262,20 @@ func (h *Handler) createSession(c *gin.Context) {
 		return
 	}
 
+	authUserID, exists := c.Get("authUserID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user id not found in context"})
+		return
+	}
+
+	userID, ok := authUserID.(string)
+	if !ok || strings.TrimSpace(userID) == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid user id in context"})
+		return
+	}
+
+	input.CreatedBy = &userID
+
 	snap, token, err := h.manager.Create(input)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -284,7 +298,43 @@ func (h *Handler) createSession(c *gin.Context) {
 }
 
 func (h *Handler) getSession(c *gin.Context) {
-	envelope, err := h.buildRuntimeEnvelope(c.Param("id"))
+	sessionID := c.Param("id")
+
+	// Public route behavior: if a bearer token is provided, enforce ownership checks.
+	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		if h.authService == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "auth service not configured"})
+			return
+		}
+
+		rawToken := strings.TrimSpace(authHeader[7:])
+		claims, err := h.authService.ValidateToken(rawToken)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": auth.ErrUnauthorized.Error()})
+			return
+		}
+
+		c.Set("authUserID", claims.Subject)
+		c.Set("authUserType", claims.UserType)
+		c.Set("authUserRole", claims.Role)
+
+		snap, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID)
+		if !ok {
+			return
+		}
+
+		envelope, envelopeErr := h.buildRuntimeEnvelopeForSnapshot(snap, sessionID)
+		if envelopeErr != nil {
+			h.writeProgramItemErr(c, envelopeErr)
+			return
+		}
+
+		c.JSON(http.StatusOK, envelope)
+		return
+	}
+
+	envelope, err := h.buildRuntimeEnvelope(sessionID)
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
 			h.writeDomainErr(c, err)
@@ -403,6 +453,13 @@ func (h *Handler) getSessionAnalytics(c *gin.Context) {
 	sessionID := c.Param("id")
 	now := time.Now().UTC()
 	// TODO(analytics-cache): Cache session analytics + freshness by session ID (short TTL) using in-memory cache or Redis.
+	_, hasAuthUserID := c.Get("authUserID")
+	_, hasAuthUserRole := c.Get("authUserRole")
+	if hasAuthUserID && hasAuthUserRole {
+		if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
+			return
+		}
+	}
 
 	var (
 		summary         analytics.SessionSummary
@@ -422,11 +479,6 @@ func (h *Handler) getSessionAnalytics(c *gin.Context) {
 	}
 
 	if !projectionFound {
-		// Only check ownership if we need to access the actual session (i.e., no projection available)
-		if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
-			return
-		}
-
 		if h.analyticsManager == nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
 			return
@@ -732,6 +784,9 @@ func (h *Handler) createProgramItem(c *gin.Context) {
 	}
 
 	sessionID := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, sessionID) {
 		return
 	}
@@ -807,6 +862,9 @@ func (h *Handler) updateProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
@@ -869,6 +927,9 @@ func (h *Handler) cancelProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
@@ -908,6 +969,9 @@ func (h *Handler) startProgramItem(c *gin.Context) {
 	item, err := h.programItemManager.GetSnapshot(itemID)
 	if err != nil {
 		h.writeProgramItemErr(c, err)
+		return
+	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
 		return
 	}
 	if !h.authorizeControl(c, item.SessionID) {
@@ -970,6 +1034,9 @@ func (h *Handler) endProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
@@ -1028,6 +1095,9 @@ func (h *Handler) pauseProgramItem(c *gin.Context) {
 	item, err := h.programItemManager.GetSnapshot(itemID)
 	if err != nil {
 		h.writeProgramItemErr(c, err)
+		return
+	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
 		return
 	}
 	if !h.authorizeControl(c, item.SessionID) {
@@ -1113,6 +1183,9 @@ func (h *Handler) resumeProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
@@ -1196,6 +1269,9 @@ func (h *Handler) adjustProgramItemTime(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
@@ -1257,6 +1333,9 @@ func (h *Handler) reorderProgramItems(c *gin.Context) {
 	}
 
 	sessionID := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, sessionID) {
 		return
 	}
@@ -1293,6 +1372,9 @@ func (h *Handler) reorderProgramItems(c *gin.Context) {
 
 func (h *Handler) startSession(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, id); !ok {
+		return
+	}
 	if !h.authorizeControl(c, id) {
 		return
 	}
@@ -1340,6 +1422,9 @@ func (h *Handler) startSession(c *gin.Context) {
 
 func (h *Handler) pauseSession(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, id); !ok {
+		return
+	}
 	if !h.authorizeControl(c, id) {
 		return
 	}
@@ -1413,6 +1498,9 @@ func (h *Handler) pauseSession(c *gin.Context) {
 
 func (h *Handler) resumeSession(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, id); !ok {
+		return
+	}
 	if !h.authorizeControl(c, id) {
 		return
 	}
@@ -1486,6 +1574,9 @@ func (h *Handler) resumeSession(c *gin.Context) {
 
 func (h *Handler) endSession(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, id); !ok {
+		return
+	}
 	if !h.authorizeControl(c, id) {
 		return
 	}
@@ -1567,6 +1658,9 @@ type adjustTimeBody struct {
 
 func (h *Handler) adjustTime(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, id); !ok {
+		return
+	}
 	if !h.authorizeControl(c, id) {
 		return
 	}
@@ -1725,6 +1819,10 @@ func (h *Handler) buildRuntimeEnvelope(sessionID string) (runtimeEnvelope, error
 		return runtimeEnvelope{}, err
 	}
 
+	return h.buildRuntimeEnvelopeForSnapshot(sessionSnap, sessionID)
+}
+
+func (h *Handler) buildRuntimeEnvelopeForSnapshot(sessionSnap session.Snapshot, sessionID string) (runtimeEnvelope, error) {
 	if h.programItemManager == nil {
 		return runtimeEnvelope{Session: sessionSnap}, nil
 	}

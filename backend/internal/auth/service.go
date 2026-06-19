@@ -99,15 +99,6 @@ func (s *Service) ValidateToken(rawToken string) (*Claims, error) {
 		return nil, ErrUnauthorized
 	}
 
-	u, err := s.users.GetByID(claims.Subject)
-	if err != nil {
-		return nil, ErrUnauthorized
-	}
-
-	if !u.IsActive || u.DeletedAt != nil {
-		return nil, ErrUnauthorized
-	}
-
 	return claims, nil
 }
 
