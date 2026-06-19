@@ -72,6 +72,14 @@ func (s *SqliteStore) runMigrations() error {
 		return err
 	}
 
+	if err := s.normalizeLegacyRoleValues(); err != nil {
+		return err
+	}
+
+	if err := s.normalizeLegacyUserTypeValues(); err != nil {
+		return err
+	}
+
 	_, err := s.db.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email);
@@ -93,6 +101,20 @@ func (s *SqliteStore) ensureRoleColumn() error {
 	}
 	if _, err := s.db.Exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'`); err != nil {
 		return fmt.Errorf("failed to add users.role column: %w", err)
+	}
+	return nil
+}
+
+func (s *SqliteStore) normalizeLegacyRoleValues() error {
+	if _, err := s.db.Exec(`UPDATE users SET role = 'user' WHERE role = 'normal' OR role = ''`); err != nil {
+		return fmt.Errorf("failed to normalize users.role values: %w", err)
+	}
+	return nil
+}
+
+func (s *SqliteStore) normalizeLegacyUserTypeValues() error {
+	if _, err := s.db.Exec(`UPDATE users SET type = 'user' WHERE type = 'normal' OR type = ''`); err != nil {
+		return fmt.Errorf("failed to normalize users.type values: %w", err)
 	}
 	return nil
 }
@@ -210,6 +232,9 @@ func (s *SqliteStore) GetByID(id string) (*User, error) {
 	if user.Role == "" {
 		user.Role = RoleUser
 	}
+	if user.Role == "normal" {
+		user.Role = RoleUser
+	}
 	user.EmailVerifiedAt = nullStringToTime(emailVerifiedAt)
 	user.DeletedAt = nullStringToTime(deletedAt)
 	user.AvatarURL = nullStringPtr(avatarURL)
@@ -280,6 +305,9 @@ func (s *SqliteStore) GetByEmail(email string) (*User, error) {
 	user.Name = nullStringPtr(name)
 	user.Email = nullStringPtr(userEmail)
 	if user.Role == "" {
+		user.Role = RoleUser
+	}
+	if user.Role == "normal" {
 		user.Role = RoleUser
 	}
 	user.EmailVerifiedAt = nullStringToTime(emailVerifiedAt)

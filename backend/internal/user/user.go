@@ -4,7 +4,7 @@ import "time"
 
 const (
 	TypeGuest  = "guest"
-	TypeNormal = "normal"
+	TypeUser   = "user"
 	RoleUser   = "user"
 	RoleAdmin  = "admin"
 )

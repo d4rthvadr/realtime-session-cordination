@@ -237,7 +237,7 @@ func (s *Service) handleSignupVerify(email string) (*user.User, error) {
 		ID:              newUserID(),
 		Email:           &email,
 		EmailVerifiedAt: &now,
-		Type:            user.TypeNormal,
+		Type:            user.TypeUser,
 		Role:            user.RoleUser,
 		CreatedAt:       now,
 		UpdatedAt:       now,
