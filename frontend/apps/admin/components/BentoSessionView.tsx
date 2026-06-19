@@ -543,7 +543,7 @@ export default function BentoSessionView({
         <div className="text-center">
           <h2 className="text-2xl font-bold">Session Not Found</h2>
           <p className="text-muted-foreground mt-2">{loadError}</p>
-          <Link href="/sessions">
+          <Link href="/dashboard/sessions">
             <Button className="mt-4" variant="outline">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back to Sessions

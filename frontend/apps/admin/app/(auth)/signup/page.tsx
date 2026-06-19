@@ -60,7 +60,7 @@ export default function SignUpPage() {
         return;
       }
 
-      router.push("/sessions");
+      router.push("/dashboard");
     });
   };
 

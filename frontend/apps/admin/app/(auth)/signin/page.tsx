@@ -60,7 +60,7 @@ export default function SignInPage() {
         return;
       }
 
-      router.push("/sessions");
+      router.push("/dashboard");
     });
   };
 
