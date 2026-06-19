@@ -111,6 +111,12 @@ func (s *Service) ValidateToken(rawToken string) (*Claims, error) {
 	return claims, nil
 }
 
+// IssueTokenForUser mints a signed JWT for an existing user.
+// Used by the OTP service to issue tokens after email verification.
+func (s *Service) IssueTokenForUser(u *user.User) (string, error) {
+	return s.issueToken(u)
+}
+
 func (s *Service) issueToken(u *user.User) (string, error) {
 	now := time.Now().UTC()
 

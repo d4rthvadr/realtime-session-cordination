@@ -13,6 +13,7 @@ import (
 	"realtime-session-coordination/backend/internal/analytics"
 	"realtime-session-coordination/backend/internal/auth"
 	"realtime-session-coordination/backend/internal/logging"
+	"realtime-session-coordination/backend/internal/otp"
 	"realtime-session-coordination/backend/internal/programitem"
 	"realtime-session-coordination/backend/internal/session"
 	"realtime-session-coordination/backend/internal/sessionlog"
@@ -24,18 +25,19 @@ import (
 )
 
 type Handler struct {
-	manager            *session.Manager
-	programItemManager *programitem.Manager
-	sessionLogManager  *sessionlog.Manager
-	analyticsManager   *analytics.Manager
-	analyticsEmitter   *analytics.Emitter
+	manager                 *session.Manager
+	programItemManager      *programitem.Manager
+	sessionLogManager       *sessionlog.Manager
+	analyticsManager        *analytics.Manager
+	analyticsEmitter        *analytics.Emitter
 	analyticsProcessorStore analytics.ProcessorStore
-	hub                *ws.Hub
-	authService        *auth.Service
-	logger             *slog.Logger
-	upgrader           websocket.Upgrader
-	runtimeLocksMu     sync.Mutex
-	runtimeLocks       map[string]*runtimeSessionLock
+	hub                     *ws.Hub
+	authService             *auth.Service
+	otpService              *otp.Service
+	logger                  *slog.Logger
+	upgrader                websocket.Upgrader
+	runtimeLocksMu          sync.Mutex
+	runtimeLocks            map[string]*runtimeSessionLock
 }
 
 type runtimeSessionLock struct {
@@ -77,6 +79,7 @@ func NewHandler(
 	analyticsProcessorStore analytics.ProcessorStore,
 	hub *ws.Hub,
 	authService *auth.Service,
+	otpService *otp.Service,
 	logger *slog.Logger,
 ) *Handler {
 	if logger == nil {
@@ -85,16 +88,17 @@ func NewHandler(
 	logger = logger.With("component", "api_handler")
 
 	return &Handler{
-		manager:            manager,
-		programItemManager: programItemManager,
-		sessionLogManager:  sessionLogManager,
-		analyticsManager:   analyticsManager,
-		analyticsEmitter:   analyticsEmitter,
+		manager:                 manager,
+		programItemManager:      programItemManager,
+		sessionLogManager:       sessionLogManager,
+		analyticsManager:        analyticsManager,
+		analyticsEmitter:        analyticsEmitter,
 		analyticsProcessorStore: analyticsProcessorStore,
-		hub:                hub,
-		authService:        authService,
-		logger:             logger,
-		runtimeLocks:       make(map[string]*runtimeSessionLock),
+		hub:                     hub,
+		authService:             authService,
+		otpService:              otpService,
+		logger:                  logger,
+		runtimeLocks:            make(map[string]*runtimeSessionLock),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -179,15 +183,29 @@ func (h *Handler) requestOTP(c *gin.Context) {
 		return
 	}
 
-	intent, ok := normalizeOTPIntent(input.Intent)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "intent must be one of: signup, signin"})
+	if h.otpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "otp service not configured"})
 		return
 	}
 
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error":  "otp request flow is not implemented yet",
-		"intent": intent,
+	result, err := h.otpService.RequestOTP(c.Request.Context(), input.Email, input.Intent)
+	if err != nil {
+		switch err {
+		case otp.ErrResendCooldown:
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+		case otp.ErrInvalidIntent:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "intent must be one of: signup, signin"})
+		default:
+			h.logger.Error("otp_request_failed", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send otp"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"challengeId":      result.ChallengeID,
+		"expiresInMinutes": result.ExpiresInMinutes,
+		"message":          "OTP sent to " + input.Email,
 	})
 }
 
@@ -198,26 +216,43 @@ func (h *Handler) verifyOTP(c *gin.Context) {
 		return
 	}
 
-	intent, ok := normalizeOTPIntent(input.Intent)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "intent must be one of: signup, signin"})
+	if h.otpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "otp service not configured"})
 		return
 	}
 
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error":       "otp verify flow is not implemented yet",
-		"intent":      intent,
-		"challengeId": strings.TrimSpace(input.ChallengeID),
+	result, err := h.otpService.VerifyOTP(c.Request.Context(), input.Email, input.Intent, input.ChallengeID, input.Code)
+	if err != nil {
+		switch err {
+		case otp.ErrOTPExpired:
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "code has expired, please request a new one"})
+		case otp.ErrOTPAlreadyUsed:
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "code has already been used"})
+		case otp.ErrMaxAttemptsReached:
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many failed attempts, please request a new code"})
+		case otp.ErrEmailAlreadyRegistered:
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		case otp.ErrVerificationFailed:
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "verification failed"})
+		default:
+			h.logger.Error("otp_verify_failed", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "verification failed"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"token": result.Token,
+		"user":  user.ToSnapshot(result.User),
 	})
 }
 
 func normalizeOTPIntent(intent string) (string, bool) {
-	trimmed := strings.ToLower(strings.TrimSpace(intent))
-	if trimmed != "signup" && trimmed != "signin" {
+	normalized, err := otp.NormalizeIntent(intent)
+	if err != nil {
 		return "", false
 	}
-
-	return trimmed, true
+	return normalized, true
 }
 
 func (h *Handler) createSession(c *gin.Context) {
@@ -433,8 +468,8 @@ func (h *Handler) getAnalyticsOverview(c *gin.Context) {
 	// TODO(analytics-cache): Cache platform overview + freshness (short TTL) in-memory or Redis to reduce repeated aggregation reads.
 
 	var (
-		overview         analytics.PlatformOverview
-		projectionFound  bool
+		overview        analytics.PlatformOverview
+		projectionFound bool
 	)
 
 	if h.analyticsProcessorStore != nil {

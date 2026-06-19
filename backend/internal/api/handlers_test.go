@@ -125,7 +125,7 @@ func newTestHandler(t *testing.T) (*Handler, *session.Manager, *programitem.Mana
 
 	hub := ws.NewHub(nil)
 
-	return NewHandler(sessionMgr, programItemMgr, sessionLogMgr, analyticsMgr, analyticsEmitter, nil, hub, nil, nil), sessionMgr, programItemMgr, sessionLogMgr, analyticsEmitter
+	return NewHandler(sessionMgr, programItemMgr, sessionLogMgr, analyticsMgr, analyticsEmitter, nil, hub, nil, nil, nil), sessionMgr, programItemMgr, sessionLogMgr, analyticsEmitter
 }
 
 func TestListSessionLogsReturnsLogsAndCount(t *testing.T) {
