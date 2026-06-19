@@ -51,7 +51,7 @@ export default function SessionCreateForm() {
           );
         }
 
-        router.push(`/sessions/${result.session.id}`);
+        router.push(`/dashboard/sessions/${result.session.id}`);
       }
     });
   };

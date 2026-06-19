@@ -70,7 +70,6 @@ import {
 
 // Import widgets
 import TimerWidget from "@/components/widgets/TimerWidget";
-import AttendeeStats from "@/components/widgets/AttendeeStats";
 import SessionLog, { LogEntry } from "@/components/widgets/SessionLog";
 import AgendaProgress from "@/components/widgets/AgendaProgress";
 import { cn } from "@/lib/utils";
@@ -543,7 +542,7 @@ export default function BentoSessionView({
         <div className="text-center">
           <h2 className="text-2xl font-bold">Session Not Found</h2>
           <p className="text-muted-foreground mt-2">{loadError}</p>
-          <Link href="/sessions">
+          <Link href="/dashboard/sessions">
             <Button className="mt-4" variant="outline">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back to Sessions
@@ -709,7 +708,7 @@ export default function BentoSessionView({
 
           <TabsContent value="dashboard" className="mt-4">
             <div className="grid grid-cols-12 gap-3 sm:gap-4">
-              {/* Top Row: Timer + Attendee Stats */}
+              {/* Top Row: Timer */}
               <TimerWidget
                 currentTime={currentTime}
                 totalTime={totalTime}
@@ -722,11 +721,6 @@ export default function BentoSessionView({
                   handleAction((token) => pauseSession(sessionId, token))
                 }
                 onRefresh={() => window.location.reload()}
-              />
-              <AttendeeStats
-                totalOnline={124}
-                participationRate={88}
-                attentionLevel="High"
               />
 
               {/* Session Controls */}

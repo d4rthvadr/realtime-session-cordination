@@ -9,15 +9,23 @@ import (
 )
 
 type Config struct {
-	Port            string
-	DBDriver        string
-	SqliteDBPath    string
-	JWTSecret       string
-	JWTExpiry       time.Duration
-	JWTIssuer       string
-	CORSAllowOrigin string
-	LogLevel        string
-	LogFormat       string
+	Port                              string
+	DBDriver                          string
+	SqliteDBPath                      string
+	// JWTSpecific configurations:
+	JWTSecret                         string
+	JWTExpiry                         time.Duration
+	JWTIssuer                         string
+	// Mailer configurations:
+	MailerMode                        string
+	OTPExpiryMinutes                  int
+	OTPMaxAttempts                    int
+	OTPResendCooldown                 time.Duration
+	CORSAllowOrigin                   string
+	// Logging configurations:
+	LogLevel                          string
+	LogFormat                         string
+	// Analytics-related configurations:
 	AnalyticsCleanupInterval          time.Duration
 	AnalyticsProcessedOutboxRetention time.Duration
 	AnalyticsDeadLetterRetention      time.Duration
@@ -26,13 +34,17 @@ type Config struct {
 
 func LoadConfig() (Config, error) {
 	cfg := Config{
-		Port:            getOrDefault("PORT", "8080"),
-		DBDriver:        getOrDefault("DB_DRIVER", "sqlite"),
-		SqliteDBPath:    getOrDefault("SQLITE_DB_PATH", "./sessions.db"),
-		JWTIssuer:       getOrDefault("JWT_ISSUER", "realtime-session-coordination"),
-		CORSAllowOrigin: os.Getenv("CORS_ALLOW_ORIGIN"),
-		LogLevel:        getOrDefault("LOG_LEVEL", "info"),
-		LogFormat:       getOrDefault("LOG_FORMAT", "json"),
+		Port:                              getOrDefault("PORT", "8080"),
+		DBDriver:                          getOrDefault("DB_DRIVER", "sqlite"),
+		SqliteDBPath:                      getOrDefault("SQLITE_DB_PATH", "./sessions.db"),
+		JWTIssuer:                         getOrDefault("JWT_ISSUER", "realtime-session-coordination"),
+		MailerMode:                        getOrDefault("MAILER_MODE", "log"),
+		OTPExpiryMinutes:                  parsePositiveIntOrDefault("OTP_EXPIRY_MINUTES", 10),
+		OTPMaxAttempts:                    parsePositiveIntOrDefault("OTP_MAX_ATTEMPTS", 5),
+		OTPResendCooldown:                 parseDurationOrDefault("OTP_RESEND_COOLDOWN", 30*time.Second),
+		CORSAllowOrigin:                   os.Getenv("CORS_ALLOW_ORIGIN"),
+		LogLevel:                          getOrDefault("LOG_LEVEL", "info"),
+		LogFormat:                         getOrDefault("LOG_FORMAT", "json"),
 		AnalyticsCleanupInterval:          parseDurationOrDefault("ANALYTICS_CLEANUP_INTERVAL", 10*time.Minute),
 		AnalyticsProcessedOutboxRetention: parseDurationOrDefault("ANALYTICS_PROCESSED_OUTBOX_RETENTION", 24*time.Hour),
 		AnalyticsDeadLetterRetention:      parseDurationOrDefault("ANALYTICS_DEAD_LETTER_RETENTION", 7*24*time.Hour),
@@ -91,5 +103,19 @@ func parseDurationOrDefault(key string, fallback time.Duration) time.Duration {
 	if err != nil || parsed <= 0 {
 		return fallback
 	}
+	return parsed
+}
+
+func parsePositiveIntOrDefault(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+
 	return parsed
 }

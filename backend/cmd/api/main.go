@@ -9,6 +9,8 @@ import (
 	"realtime-session-coordination/backend/internal/auth"
 	"realtime-session-coordination/backend/internal/config"
 	"realtime-session-coordination/backend/internal/logging"
+	"realtime-session-coordination/backend/internal/mailer"
+	"realtime-session-coordination/backend/internal/otp"
 	"realtime-session-coordination/backend/internal/programitem"
 	"realtime-session-coordination/backend/internal/session"
 	"realtime-session-coordination/backend/internal/sessionlog"
@@ -20,40 +22,45 @@ import (
 )
 
 // initStores creates the appropriate stores based on DB_DRIVER env var.
-func initStores(cfg config.Config) (session.Store, programitem.Store, sessionlog.Store, user.Store, analytics.IngestionStore, analytics.ProcessorStore, error) {
+func initStores(cfg config.Config) (session.Store, programitem.Store, sessionlog.Store, user.Store, otp.Store, analytics.IngestionStore, analytics.ProcessorStore, error) {
 	switch cfg.DBDriver {
 	case "memory":
 		sessionStore := session.NewMemoryStore()
-		return sessionStore, programitem.NewMemoryStore(sessionStore.SessionExists), sessionlog.NewMemoryStore(), user.NewMemoryStore(), nil, nil, nil
+		return sessionStore, programitem.NewMemoryStore(sessionStore.SessionExists), sessionlog.NewMemoryStore(), user.NewMemoryStore(), otp.NewMemoryStore(), nil, nil, nil
 	case "sqlite":
 		sessionStore, err := session.NewSqliteStore(cfg.SqliteDBPath)
 		if err != nil {
-			return nil, nil, nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, nil, err
 		}
 
 		programItemStore, err := programitem.NewSqliteStore(cfg.SqliteDBPath)
 		if err != nil {
-			return nil, nil, nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, nil, err
 		}
 
 		sessionLogStore, err := sessionlog.NewSqliteStore(cfg.SqliteDBPath)
 		if err != nil {
-			return nil, nil, nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, nil, err
 		}
 
 		userStore, err := user.NewSqliteStore(cfg.SqliteDBPath)
 		if err != nil {
-			return nil, nil, nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, nil, err
+		}
+
+		otpStore, err := otp.NewSqliteStore(cfg.SqliteDBPath)
+		if err != nil {
+			return nil, nil, nil, nil, nil, nil, nil, err
 		}
 
 		analyticsStore, err := analytics.NewSqliteStore(cfg.SqliteDBPath)
 		if err != nil {
-			return nil, nil, nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, nil, err
 		}
 
-		return sessionStore, programItemStore, sessionLogStore, userStore, analyticsStore, analyticsStore, nil
+		return sessionStore, programItemStore, sessionLogStore, userStore, otpStore, analyticsStore, analyticsStore, nil
 	default:
-		return nil, nil, nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil, nil, nil
 	}
 }
 
@@ -77,7 +84,14 @@ func main() {
 	}
 	appLogger := logger.With("component", "api_server")
 
-	store, programItemStore, sessionLogStore, userStore, analyticsIngestionStore, analyticsProcessorStore, err := initStores(cfg)
+	otpMailer, err := mailer.New(cfg.MailerMode, logger)
+	if err != nil {
+		appLogger.Error("mailer_initialization_failed", "error", err)
+		os.Exit(1)
+	}
+	appLogger.Info("mailer_initialized", "mode", cfg.MailerMode)
+
+	store, programItemStore, sessionLogStore, userStore, otpStore, analyticsIngestionStore, analyticsProcessorStore, err := initStores(cfg)
 	if err != nil {
 		appLogger.Error("store_initialization_failed", "error", err)
 		os.Exit(1)
@@ -88,6 +102,12 @@ func main() {
 		appLogger.Error("auth_service_initialization_failed", "error", err)
 		os.Exit(1)
 	}
+
+	otpService := otp.NewService(otpStore, userStore, authService, otpMailer, logger, otp.ServiceConfig{
+		ExpiryMinutes:  cfg.OTPExpiryMinutes,
+		MaxAttempts:    cfg.OTPMaxAttempts,
+		ResendCooldown: cfg.OTPResendCooldown,
+	})
 
 	manager := session.NewManager(store)
 	programItemManager := programitem.NewManager(programItemStore)
@@ -112,7 +132,7 @@ func main() {
 		go processor.Start(context.Background())
 	}
 	hub := ws.NewHub(logger)
-	handler := api.NewHandler(manager, programItemManager, sessionLogManager, analyticsManager, analyticsEmitter, analyticsProcessorStore, hub, authService, logger)
+	handler := api.NewHandler(manager, programItemManager, sessionLogManager, analyticsManager, analyticsEmitter, analyticsProcessorStore, hub, authService, otpService, logger)
 
 	router := gin.New()
 	router.Use(gin.Recovery(), api.CORSMiddleware(), api.RequestLoggingMiddleware(logger))

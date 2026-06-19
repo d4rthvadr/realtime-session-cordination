@@ -13,6 +13,7 @@ import (
 	"realtime-session-coordination/backend/internal/analytics"
 	"realtime-session-coordination/backend/internal/auth"
 	"realtime-session-coordination/backend/internal/logging"
+	"realtime-session-coordination/backend/internal/otp"
 	"realtime-session-coordination/backend/internal/programitem"
 	"realtime-session-coordination/backend/internal/session"
 	"realtime-session-coordination/backend/internal/sessionlog"
@@ -24,18 +25,19 @@ import (
 )
 
 type Handler struct {
-	manager            *session.Manager
-	programItemManager *programitem.Manager
-	sessionLogManager  *sessionlog.Manager
-	analyticsManager   *analytics.Manager
-	analyticsEmitter   *analytics.Emitter
+	manager                 *session.Manager
+	programItemManager      *programitem.Manager
+	sessionLogManager       *sessionlog.Manager
+	analyticsManager        *analytics.Manager
+	analyticsEmitter        *analytics.Emitter
 	analyticsProcessorStore analytics.ProcessorStore
-	hub                *ws.Hub
-	authService        *auth.Service
-	logger             *slog.Logger
-	upgrader           websocket.Upgrader
-	runtimeLocksMu     sync.Mutex
-	runtimeLocks       map[string]*runtimeSessionLock
+	hub                     *ws.Hub
+	authService             *auth.Service
+	otpService              *otp.Service
+	logger                  *slog.Logger
+	upgrader                websocket.Upgrader
+	runtimeLocksMu          sync.Mutex
+	runtimeLocks            map[string]*runtimeSessionLock
 }
 
 type runtimeSessionLock struct {
@@ -56,6 +58,18 @@ type sessionLogSocketMessage struct {
 	SessionLog sessionlog.Snapshot `json:"sessionLog"`
 }
 
+type otpRequestInput struct {
+	Email  string `json:"email" binding:"required,email"`
+	Intent string `json:"intent" binding:"required"`
+}
+
+type otpVerifyInput struct {
+	Email       string `json:"email" binding:"required,email"`
+	Intent      string `json:"intent" binding:"required"`
+	ChallengeID string `json:"challengeId" binding:"required"`
+	Code        string `json:"code" binding:"required"`
+}
+
 func NewHandler(
 	manager *session.Manager,
 	programItemManager *programitem.Manager,
@@ -65,6 +79,7 @@ func NewHandler(
 	analyticsProcessorStore analytics.ProcessorStore,
 	hub *ws.Hub,
 	authService *auth.Service,
+	otpService *otp.Service,
 	logger *slog.Logger,
 ) *Handler {
 	if logger == nil {
@@ -73,16 +88,17 @@ func NewHandler(
 	logger = logger.With("component", "api_handler")
 
 	return &Handler{
-		manager:            manager,
-		programItemManager: programItemManager,
-		sessionLogManager:  sessionLogManager,
-		analyticsManager:   analyticsManager,
-		analyticsEmitter:   analyticsEmitter,
+		manager:                 manager,
+		programItemManager:      programItemManager,
+		sessionLogManager:       sessionLogManager,
+		analyticsManager:        analyticsManager,
+		analyticsEmitter:        analyticsEmitter,
 		analyticsProcessorStore: analyticsProcessorStore,
-		hub:                hub,
-		authService:        authService,
-		logger:             logger,
-		runtimeLocks:       make(map[string]*runtimeSessionLock),
+		hub:                     hub,
+		authService:             authService,
+		otpService:              otpService,
+		logger:                  logger,
+		runtimeLocks:            make(map[string]*runtimeSessionLock),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -97,6 +113,8 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	apiV1 := router.Group("/api/v1")
 	{
 		apiV1.POST("/auth/guest", h.createGuest)
+		apiV1.POST("/auth/otp/request", h.requestOTP)
+		apiV1.POST("/auth/otp/verify", h.verifyOTP)
 
 		protected := apiV1.Group("")
 		protected.Use(h.requireAuth())
@@ -158,12 +176,105 @@ func (h *Handler) createGuest(c *gin.Context) {
 	})
 }
 
+func (h *Handler) requestOTP(c *gin.Context) {
+	var input otpRequestInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	if h.otpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "otp service not configured"})
+		return
+	}
+
+	result, err := h.otpService.RequestOTP(c.Request.Context(), input.Email, input.Intent)
+	if err != nil {
+		switch err {
+		case otp.ErrResendCooldown:
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+		case otp.ErrInvalidIntent:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "intent must be one of: signup, signin"})
+		default:
+			h.logger.Error("otp_request_failed", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send otp"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"challengeId":      result.ChallengeID,
+		"expiresInMinutes": result.ExpiresInMinutes,
+		"message":          "OTP sent to " + input.Email,
+	})
+}
+
+func (h *Handler) verifyOTP(c *gin.Context) {
+	var input otpVerifyInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	if h.otpService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "otp service not configured"})
+		return
+	}
+
+	result, err := h.otpService.VerifyOTP(c.Request.Context(), input.Email, input.Intent, input.ChallengeID, input.Code)
+	if err != nil {
+		switch err {
+		case otp.ErrOTPExpired:
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "code has expired, please request a new one"})
+		case otp.ErrOTPAlreadyUsed:
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "code has already been used"})
+		case otp.ErrMaxAttemptsReached:
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many failed attempts, please request a new code"})
+		case otp.ErrEmailAlreadyRegistered:
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		case otp.ErrVerificationFailed:
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "verification failed"})
+		default:
+			h.logger.Error("otp_verify_failed", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "verification failed"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"token": result.Token,
+		"user":  user.ToSnapshot(result.User),
+	})
+}
+
+func normalizeOTPIntent(intent string) (string, bool) {
+	normalized, err := otp.NormalizeIntent(intent)
+	if err != nil {
+		return "", false
+	}
+	return normalized, true
+}
+
 func (h *Handler) createSession(c *gin.Context) {
 	var input session.CreateInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
+
+	authUserID, exists := c.Get("authUserID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user id not found in context"})
+		return
+	}
+
+	userID, ok := authUserID.(string)
+	if !ok || strings.TrimSpace(userID) == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid user id in context"})
+		return
+	}
+
+	input.CreatedBy = &userID
 
 	snap, token, err := h.manager.Create(input)
 	if err != nil {
@@ -187,7 +298,43 @@ func (h *Handler) createSession(c *gin.Context) {
 }
 
 func (h *Handler) getSession(c *gin.Context) {
-	envelope, err := h.buildRuntimeEnvelope(c.Param("id"))
+	sessionID := c.Param("id")
+
+	// Public route behavior: if a bearer token is provided, enforce ownership checks.
+	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		if h.authService == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "auth service not configured"})
+			return
+		}
+
+		rawToken := strings.TrimSpace(authHeader[7:])
+		claims, err := h.authService.ValidateToken(rawToken)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": auth.ErrUnauthorized.Error()})
+			return
+		}
+
+		c.Set("authUserID", claims.Subject)
+		c.Set("authUserType", claims.UserType)
+		c.Set("authUserRole", claims.Role)
+
+		snap, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID)
+		if !ok {
+			return
+		}
+
+		envelope, envelopeErr := h.buildRuntimeEnvelopeForSnapshot(snap, sessionID)
+		if envelopeErr != nil {
+			h.writeProgramItemErr(c, envelopeErr)
+			return
+		}
+
+		c.JSON(http.StatusOK, envelope)
+		return
+	}
+
+	envelope, err := h.buildRuntimeEnvelope(sessionID)
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
 			h.writeDomainErr(c, err)
@@ -306,6 +453,13 @@ func (h *Handler) getSessionAnalytics(c *gin.Context) {
 	sessionID := c.Param("id")
 	now := time.Now().UTC()
 	// TODO(analytics-cache): Cache session analytics + freshness by session ID (short TTL) using in-memory cache or Redis.
+	_, hasAuthUserID := c.Get("authUserID")
+	_, hasAuthUserRole := c.Get("authUserRole")
+	if hasAuthUserID && hasAuthUserRole {
+		if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
+			return
+		}
+	}
 
 	var (
 		summary         analytics.SessionSummary
@@ -325,11 +479,6 @@ func (h *Handler) getSessionAnalytics(c *gin.Context) {
 	}
 
 	if !projectionFound {
-		// Only check ownership if we need to access the actual session (i.e., no projection available)
-		if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
-			return
-		}
-
 		if h.analyticsManager == nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "analytics manager not configured"})
 			return
@@ -371,8 +520,8 @@ func (h *Handler) getAnalyticsOverview(c *gin.Context) {
 	// TODO(analytics-cache): Cache platform overview + freshness (short TTL) in-memory or Redis to reduce repeated aggregation reads.
 
 	var (
-		overview         analytics.PlatformOverview
-		projectionFound  bool
+		overview        analytics.PlatformOverview
+		projectionFound bool
 	)
 
 	if h.analyticsProcessorStore != nil {
@@ -635,6 +784,9 @@ func (h *Handler) createProgramItem(c *gin.Context) {
 	}
 
 	sessionID := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, sessionID) {
 		return
 	}
@@ -710,6 +862,9 @@ func (h *Handler) updateProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
@@ -772,6 +927,9 @@ func (h *Handler) cancelProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
@@ -811,6 +969,9 @@ func (h *Handler) startProgramItem(c *gin.Context) {
 	item, err := h.programItemManager.GetSnapshot(itemID)
 	if err != nil {
 		h.writeProgramItemErr(c, err)
+		return
+	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
 		return
 	}
 	if !h.authorizeControl(c, item.SessionID) {
@@ -873,6 +1034,9 @@ func (h *Handler) endProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
@@ -931,6 +1095,9 @@ func (h *Handler) pauseProgramItem(c *gin.Context) {
 	item, err := h.programItemManager.GetSnapshot(itemID)
 	if err != nil {
 		h.writeProgramItemErr(c, err)
+		return
+	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
 		return
 	}
 	if !h.authorizeControl(c, item.SessionID) {
@@ -1016,6 +1183,9 @@ func (h *Handler) resumeProgramItem(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
@@ -1099,6 +1269,9 @@ func (h *Handler) adjustProgramItemTime(c *gin.Context) {
 		h.writeProgramItemErr(c, err)
 		return
 	}
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, item.SessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, item.SessionID) {
 		return
 	}
@@ -1160,6 +1333,9 @@ func (h *Handler) reorderProgramItems(c *gin.Context) {
 	}
 
 	sessionID := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, sessionID); !ok {
+		return
+	}
 	if !h.authorizeControl(c, sessionID) {
 		return
 	}
@@ -1196,6 +1372,9 @@ func (h *Handler) reorderProgramItems(c *gin.Context) {
 
 func (h *Handler) startSession(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, id); !ok {
+		return
+	}
 	if !h.authorizeControl(c, id) {
 		return
 	}
@@ -1243,6 +1422,9 @@ func (h *Handler) startSession(c *gin.Context) {
 
 func (h *Handler) pauseSession(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, id); !ok {
+		return
+	}
 	if !h.authorizeControl(c, id) {
 		return
 	}
@@ -1316,6 +1498,9 @@ func (h *Handler) pauseSession(c *gin.Context) {
 
 func (h *Handler) resumeSession(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, id); !ok {
+		return
+	}
 	if !h.authorizeControl(c, id) {
 		return
 	}
@@ -1389,6 +1574,9 @@ func (h *Handler) resumeSession(c *gin.Context) {
 
 func (h *Handler) endSession(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, id); !ok {
+		return
+	}
 	if !h.authorizeControl(c, id) {
 		return
 	}
@@ -1470,6 +1658,9 @@ type adjustTimeBody struct {
 
 func (h *Handler) adjustTime(c *gin.Context) {
 	id := c.Param("id")
+	if _, ok := h.getSessionSnapshotWithOwnershipCheck(c, id); !ok {
+		return
+	}
 	if !h.authorizeControl(c, id) {
 		return
 	}
@@ -1628,6 +1819,10 @@ func (h *Handler) buildRuntimeEnvelope(sessionID string) (runtimeEnvelope, error
 		return runtimeEnvelope{}, err
 	}
 
+	return h.buildRuntimeEnvelopeForSnapshot(sessionSnap, sessionID)
+}
+
+func (h *Handler) buildRuntimeEnvelopeForSnapshot(sessionSnap session.Snapshot, sessionID string) (runtimeEnvelope, error) {
 	if h.programItemManager == nil {
 		return runtimeEnvelope{Session: sessionSnap}, nil
 	}

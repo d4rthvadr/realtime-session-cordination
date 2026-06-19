@@ -50,7 +50,7 @@ export default function TimerWidget({
   };
 
   return (
-    <Card className="col-span-12 md:col-span-8 p-4 md:p-6 flex flex-col justify-between">
+    <Card className="col-span-12 p-4 md:p-6 flex flex-col justify-between">
       <div className="flex justify-between items-start">
         <Badge variant={getStatusVariant()} className="tracking-wider">
           {getStatusLabel()}

@@ -31,17 +31,23 @@ export default function SignUpPage() {
     }
 
     startTransition(async () => {
-      const result = await sendOTP(email);
+      const result = await sendOTP(email, "signup");
 
       if (result.error) {
         setError(result.error);
         return;
       }
 
+      const params = new URLSearchParams({
+        email,
+        type: "signup",
+        ...(result.challengeId ? { challengeId: result.challengeId } : {}),
+        ...(result.expiresInMinutes
+          ? { expiresIn: String(result.expiresInMinutes) }
+          : {}),
+      });
       // Navigate to verification page with email in query
-      router.push(
-        `/auth/verify?email=${encodeURIComponent(email)}&type=signup`,
-      );
+      router.push(`/verify?${params.toString()}`);
     });
   };
 

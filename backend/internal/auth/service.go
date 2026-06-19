@@ -99,16 +99,13 @@ func (s *Service) ValidateToken(rawToken string) (*Claims, error) {
 		return nil, ErrUnauthorized
 	}
 
-	u, err := s.users.GetByID(claims.Subject)
-	if err != nil {
-		return nil, ErrUnauthorized
-	}
-
-	if !u.IsActive || u.DeletedAt != nil {
-		return nil, ErrUnauthorized
-	}
-
 	return claims, nil
+}
+
+// IssueTokenForUser mints a signed JWT for an existing user.
+// Used by the OTP service to issue tokens after email verification.
+func (s *Service) IssueTokenForUser(u *user.User) (string, error) {
+	return s.issueToken(u)
 }
 
 func (s *Service) issueToken(u *user.User) (string, error) {

@@ -10,15 +10,26 @@ export interface AuthResponse {
   success: boolean;
   error: string | null;
   message?: string;
+  challengeId?: string;
+  expiresInMinutes?: number;
 }
 
 export interface VerifyOTPResponse extends AuthResponse {
   token?: string;
   userId?: string;
+  role?: string;
 }
 
 const AUTH_COOKIE_NAME = "admin_auth_token";
 const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
+
+interface GuestAuthPayload {
+  token?: string;
+  user?: {
+    id?: string;
+  };
+  error?: string;
+}
 
 function setAdminAuthCookie(token: string) {
   const cookieStore = cookies();
@@ -46,41 +57,84 @@ function clearAdminAuthCookie() {
   });
 }
 
+async function requestGuestToken(): Promise<{
+  token: string;
+  userId?: string;
+} | null> {
+  const response = await fetch(`${AUTH_BACKEND_URL}/api/v1/auth/guest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = (await response.json()) as GuestAuthPayload;
+  if (!data.token) {
+    return null;
+  }
+
+  return {
+    token: data.token,
+    userId: data.user?.id,
+  };
+}
+
 export async function signOutAdmin(): Promise<never> {
   clearAdminAuthCookie();
   redirect("/signin");
 }
 
 // Send OTP to email
-export async function sendOTP(email: string): Promise<AuthResponse> {
+export async function sendOTP(
+  email: string,
+  intent: string,
+): Promise<AuthResponse> {
   try {
-    // TODO: Implement actual backend call
-    // For now, simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const response = await fetch(
+      `${AUTH_BACKEND_URL}/api/v1/auth/otp/request`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, intent }),
+        cache: "no-store",
+      },
+    );
 
-    // Mock validation
-    if (!email || !email.includes("@")) {
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (response.status === 429) {
+        return {
+          success: false,
+          error: data.error || "Please wait before requesting another code",
+        };
+      }
       return {
         success: false,
-        error: "Please provide a valid email address",
+        error: data.error || "Failed to send OTP",
       };
     }
 
-    // Simulate successful OTP send
-    console.log(`Sending OTP to ${email}`);
-
+    const data = (await response.json()) as {
+      challengeId: string;
+      expiresInMinutes: number;
+      message?: string;
+    };
     return {
       success: true,
       error: null,
-      message: `OTP sent to ${email}`,
+      message: data.message,
+      challengeId: data.challengeId,
+      expiresInMinutes: data.expiresInMinutes,
     };
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to send OTP";
-    return {
-      success: false,
-      error: message,
-    };
+    return { success: false, error: message };
   }
 }
 
@@ -88,83 +142,69 @@ export async function sendOTP(email: string): Promise<AuthResponse> {
 export async function verifyOTP(
   email: string,
   code: string,
+  intent: string,
+  challengeId: string,
 ): Promise<VerifyOTPResponse> {
   try {
-    // TODO: Implement actual backend call
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const response = await fetch(`${AUTH_BACKEND_URL}/api/v1/auth/otp/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, intent, challengeId, code }),
+      cache: "no-store",
+    });
 
-    // Mock validation
-    if (!email || !code) {
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (response.status === 429) {
+        return {
+          success: false,
+          error: data.error || "Too many attempts. Please request a new code.",
+        };
+      }
       return {
         success: false,
-        error: "Email and code are required",
+        error: data.error || "Verification failed",
       };
     }
 
-    if (code.length !== 6) {
-      return {
-        success: false,
-        error: "OTP code must be 6 digits",
-      };
+    const data = (await response.json()) as {
+      token: string;
+      user: { id: string; role: string };
+    };
+    if (!data.token) {
+      return { success: false, error: "No token received" };
     }
 
-    // Mock verification (accept any 6-digit code for demo)
-    console.log(`Verifying OTP for ${email}: ${code}`);
-
-    const token = `mock-token-${Date.now()}`;
-    setAdminAuthCookie(token);
+    setAdminAuthCookie(data.token);
 
     return {
       success: true,
       error: null,
-      message: "OTP verified successfully",
-      token,
-      userId: `user-${Date.now()}`,
+      message: "Verified successfully",
+      token: data.token,
+      userId: data.user?.id,
+      role: data.user?.role,
     };
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to verify OTP";
-    return {
-      success: false,
-      error: message,
-    };
+    return { success: false, error: message };
   }
 }
 
 export async function continueAsGuest(): Promise<AuthResponse> {
   try {
-    const response = await fetch(`${AUTH_BACKEND_URL}/api/v1/auth/guest`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      let backendError = "Failed to create guest session";
-      try {
-        const data = (await response.json()) as { error?: string };
-        if (data.error) {
-          backendError = data.error;
-        }
-      } catch {
-        // Ignore JSON parse errors and keep fallback message.
-      }
-
+    const guestAuth = await requestGuestToken();
+    if (!guestAuth) {
       return {
         success: false,
-        error: backendError,
+        error: "Failed to create guest session",
       };
     }
 
-    const data = (await response.json()) as { token?: string };
-    if (!data.token) {
-      return {
-        success: false,
-        error: "Guest token missing in response",
-      };
-    }
-
-    setAdminAuthCookie(data.token);
+    setAdminAuthCookie(guestAuth.token);
 
     return {
       success: true,

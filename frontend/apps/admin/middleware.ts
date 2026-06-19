@@ -1,23 +1,20 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 
+if (!process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
 const AUTH_COOKIE_NAME = "admin_auth_token";
-const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || "dev-secret-key",
-);
+const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET);
 
 function isProtectedPath(pathname: string): boolean {
-  return (
-    pathname === "/" ||
-    pathname.startsWith("/dashboard") ||
-    pathname.startsWith("/sessions")
-  );
+  return pathname === "/" || pathname.startsWith("/dashboard");
 }
 
+const authPaths = ["/signin", "/signup", "/verify"];
+
 function isAuthPath(pathname: string): boolean {
-  return (
-    pathname === "/signin" || pathname === "/signup" || pathname === "/verify"
-  );
+  return authPaths.includes(pathname);
 }
 
 async function verifyAuth(token: string): Promise<{ role: string } | null> {
@@ -43,17 +40,33 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(signInUrl);
   }
 
-  // Redirect authenticated users away from auth paths
-  if (isAuthPath(pathname) && token) {
+  const auth = token ? await verifyAuth(token) : null;
+
+  // If token exists but is invalid, clear it to prevent redirect loops.
+  if (token && !auth) {
+    if (isAuthPath(pathname)) {
+      const response = NextResponse.next();
+      response.cookies.delete(AUTH_COOKIE_NAME);
+      return response;
+    }
+
+    const signInUrl = new URL("/signin", req.url);
+    signInUrl.searchParams.set("next", pathname);
+    const response = NextResponse.redirect(signInUrl);
+    response.cookies.delete(AUTH_COOKIE_NAME);
+    return response;
+  }
+
+  // Redirect authenticated users away from auth paths.
+  // Both user and admin roles can use dashboard routes.
+  if (isAuthPath(pathname) && auth) {
     return NextResponse.redirect(new URL("/dashboard", req.url));
   }
 
-  // Gate /dashboard routes to admin role only
-  if (pathname.startsWith("/dashboard") && token) {
-    const auth = await verifyAuth(token);
-    if (!auth || auth.role !== "admin") {
-      // Redirect non-admin users to home or signin
-      return NextResponse.redirect(new URL("/signin", req.url));
+  // Gate /dashboard/ops routes to admin role only.
+  if (pathname.startsWith("/dashboard/ops") && auth) {
+    if (auth.role !== "admin") {
+      return NextResponse.redirect(new URL("/dashboard", req.url));
     }
   }
 
@@ -61,12 +74,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    "/",
-    "/dashboard/:path*",
-    "/sessions/:path*",
-    "/signin",
-    "/signup",
-    "/verify",
-  ],
+  matcher: ["/", "/dashboard/:path*", "/signin", "/signup", "/verify"],
 };
