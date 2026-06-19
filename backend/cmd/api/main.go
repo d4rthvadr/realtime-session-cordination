@@ -9,6 +9,7 @@ import (
 	"realtime-session-coordination/backend/internal/auth"
 	"realtime-session-coordination/backend/internal/config"
 	"realtime-session-coordination/backend/internal/logging"
+	"realtime-session-coordination/backend/internal/mailer"
 	"realtime-session-coordination/backend/internal/programitem"
 	"realtime-session-coordination/backend/internal/session"
 	"realtime-session-coordination/backend/internal/sessionlog"
@@ -76,6 +77,14 @@ func main() {
 		os.Exit(1)
 	}
 	appLogger := logger.With("component", "api_server")
+
+	otpMailer, err := mailer.New(cfg.MailerMode, logger)
+	if err != nil {
+		appLogger.Error("mailer_initialization_failed", "error", err)
+		os.Exit(1)
+	}
+	_ = otpMailer // Wired in Phase 4; consumed by OTP service in later phase.
+	appLogger.Info("mailer_initialized", "mode", cfg.MailerMode)
 
 	store, programItemStore, sessionLogStore, userStore, analyticsIngestionStore, analyticsProcessorStore, err := initStores(cfg)
 	if err != nil {
