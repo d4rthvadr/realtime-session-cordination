@@ -61,14 +61,13 @@ export async function middleware(req: NextRequest) {
   }
 
   // Redirect authenticated users away from auth paths.
-  // Admin users land on dashboard; non-admin users land on sessions.
+  // Both user and admin roles can use dashboard routes.
   if (isAuthPath(pathname) && auth) {
-    const destination = auth.role === "admin" ? "/dashboard" : "/sessions";
-    return NextResponse.redirect(new URL(destination, req.url));
+    return NextResponse.redirect(new URL("/dashboard", req.url));
   }
 
-  // Gate /dashboard routes to admin role only
-  if (pathname.startsWith("/dashboard") && auth) {
+  // Gate /dashboard/ops routes to admin role only.
+  if (pathname.startsWith("/dashboard/ops") && auth) {
     if (auth.role !== "admin") {
       return NextResponse.redirect(new URL("/sessions", req.url));
     }

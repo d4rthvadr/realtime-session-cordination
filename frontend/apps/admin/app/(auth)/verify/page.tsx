@@ -100,11 +100,11 @@ function VerifyOTPContent() {
         return;
       }
 
-      // Redirect by role: admins go to dashboard, everyone else to sessions
+      // Redirect by role: user/admin users go to dashboard.
       if (result.role === "admin") {
         router.push("/dashboard");
       } else {
-        router.push("/sessions");
+        router.push("/dashboard");
       }
     });
   };
